@@ -1,5 +1,7 @@
-data/
-models/
+data/**
+models/**
+!data/**/.gitkeep
+!models/**/.gitkeep
 .env
 __pycache__/
 *.pyc
