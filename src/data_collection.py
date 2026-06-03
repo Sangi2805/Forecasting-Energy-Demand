@@ -1,0 +1,84 @@
+from datetime import date
+from pathlib import Path
+
+import pandas as pd
+#from streamlit import columns
+import config as cfg
+import holidays as hl
+import requests
+import os
+
+# Read column names of  a csv file 
+def read_col_names(file_path: Path)-> None:
+    if file_path.exists():
+        columns = pd.read_csv(file_path, nrows=0).columns
+        print(columns.tolist())
+    else:
+        print(f"File {file_path} does not exist.")
+
+# Read csv file
+def read_csv_file(file_path: Path, cols: list[str] = None) -> pd.DataFrame:
+    if file_path.exists():
+        data = pd.read_csv(file_path, usecols=cols)
+        return data
+    else:
+        print(f"File {file_path} does not exist.")
+        return None
+    
+# Read holidays data using the holidays library
+# date (str) : yyyy-mm-dd
+def read_holiday_data(from_date: str, to_date: str) -> pd.DataFrame:
+    
+    begin_date = pd.Timestamp(from_date).date()
+    end_date = pd.Timestamp(to_date).date()
+
+    ny_holidays = hl.country_holidays(
+        country="US",
+        subdiv="NY",
+        years=range(begin_date.year, end_date.year + 1)
+    )
+
+    holiday_rows = [
+        {"date": date, "holiday": name}
+        for date, name in ny_holidays.items()
+        if begin_date <= date <= end_date
+    ]
+
+    return pd.DataFrame(holiday_rows).sort_values("date").reset_index(drop=True)
+
+# Read the weather information from open.meteo API
+# date (str) : yyyy-mm-dd
+# isforecast (bool) : if True, forecast data, otherwise  historical data
+def read_weather_data(begin_date: str, end_date: str, isforecast: bool) -> pd.DataFrame:
+        if isforecast:       
+            url = "https://api.open-meteo.com/v1/forecast"
+        else:       
+            url = "https://archive-api.open-meteo.com/v1/archive"
+
+        params = {
+            "latitude": 40.7128,
+            "longitude": -74.0060,
+            "start_date": begin_date,
+            "end_date": end_date,
+            "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m",
+            "timezone": "America/New_York"
+        }
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            hourly_data = data.get("hourly", {})
+            return pd.DataFrame(hourly_data)
+        else:
+            print(f"Failed to fetch weather data: {response.status_code}")
+            return pd.DataFrame()
+
+
+if __name__ == "__main__":
+    # Example usage
+    from_date = "2015-07-01"
+    to_date = "2016-07-01"
+    holiday_df = read_holiday_data(from_date, to_date)
+    print(holiday_df.head())
+
+    weather_df = read_weather_data(from_date, to_date, False)
+    print(weather_df.head())
