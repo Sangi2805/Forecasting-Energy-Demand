@@ -89,8 +89,10 @@ if __name__ == "__main__":
     # Example usage
     from_date = "2015-07-01"
     to_date = "2016-07-01"
-    holiday_df = read_holiday_data(from_date, to_date)
-    print(holiday_df.head())
+    #holiday_df = read_holiday_data(from_date, to_date)
+    #print(holiday_df.head())
 
-    weather_df = read_weather_data(from_date, to_date, isforecast=False)
-    print(weather_df.head())
+    #weather_df = read_weather_data(from_date, to_date, isforecast=False)
+    #print(weather_df.head())
+
+   
