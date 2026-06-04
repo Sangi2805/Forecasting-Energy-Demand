@@ -8,15 +8,18 @@ import holidays as hl
 import requests
 import os
 
+#########################################
 # Read column names of  a csv file 
+#########################################
 def read_col_names(file_path: Path)-> None:
     if file_path.exists():
         columns = pd.read_csv(file_path, nrows=0).columns
         print(columns.tolist())
     else:
         print(f"File {file_path} does not exist.")
-
+#########################################
 # Read csv file
+#########################################
 def read_csv_file(file_path: Path, cols: list[str] = None) -> pd.DataFrame:
     if file_path.exists():
         data = pd.read_csv(file_path, usecols=cols)
@@ -24,9 +27,10 @@ def read_csv_file(file_path: Path, cols: list[str] = None) -> pd.DataFrame:
     else:
         print(f"File {file_path} does not exist.")
         return None
-    
+#########################################    
 # Read holidays data using the holidays library
 # date (str) : yyyy-mm-dd
+#########################################
 def read_holiday_data(from_date: str, to_date: str) -> pd.DataFrame:
     
     begin_date = pd.Timestamp(from_date).date()
@@ -45,22 +49,30 @@ def read_holiday_data(from_date: str, to_date: str) -> pd.DataFrame:
     ]
 
     return pd.DataFrame(holiday_rows).sort_values("date").reset_index(drop=True)
-
+#########################################
 # Read the weather information from open.meteo API
 # date (str) : yyyy-mm-dd
 # isforecast (bool) : if True, forecast data, otherwise  historical data
-def read_weather_data(begin_date: str, end_date: str, isforecast: bool) -> pd.DataFrame:
-        if isforecast:       
+# lat (float) : latitude of the location, default is of New York City
+# lon (float) : longitude of the location, default is of New York City
+#########################################
+def read_weather_data(
+        begin_date: str, end_date: str, 
+        lat: float=40.7128, lon: float=-74.0060,
+        hourly_variables: list[str]=["temperature_2m", "relative_humidity_2m", "wind_speed_10m"], 
+        isforecast: bool=False
+        ) -> pd.DataFrame:
+        if isforecast:      
             url = "https://api.open-meteo.com/v1/forecast"
         else:       
             url = "https://archive-api.open-meteo.com/v1/archive"
 
         params = {
-            "latitude": 40.7128,
-            "longitude": -74.0060,
+            "latitude": lat,
+            "longitude": lon,
             "start_date": begin_date,
             "end_date": end_date,
-            "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m",
+            "hourly": ",".join(hourly_variables),
             "timezone": "America/New_York"
         }
         response = requests.get(url, params=params)
@@ -80,5 +92,5 @@ if __name__ == "__main__":
     holiday_df = read_holiday_data(from_date, to_date)
     print(holiday_df.head())
 
-    weather_df = read_weather_data(from_date, to_date, False)
+    weather_df = read_weather_data(from_date, to_date, isforecast=False)
     print(weather_df.head())
