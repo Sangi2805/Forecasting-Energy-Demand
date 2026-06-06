@@ -6,3 +6,4 @@ openpyxl
 mlflow
 python-dotenv
 holidays
+dagshub

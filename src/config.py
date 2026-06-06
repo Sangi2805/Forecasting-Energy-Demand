@@ -99,3 +99,15 @@ MODEL_NAME = "xgboost_model.pkl"
 # Global Variables
 ##########################################################################
 
+import os
+import mlflow
+
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI")
+DAGSHUB_USER_NAME = os.getenv("DAGSHUB_USER_NAME")
+DAGSHUB_TOKEN = os.getenv("DAGSHUB_TOKEN")
+
+if MLFLOW_TRACKING_URI and DAGSHUB_TOKEN:
+    os.environ["MLFLOW_TRACKING_USERNAME"] = DAGSHUB_USER_NAME
+    os.environ["MLFLOW_TRACKING_PASSWORD"] = DAGSHUB_TOKEN
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+
