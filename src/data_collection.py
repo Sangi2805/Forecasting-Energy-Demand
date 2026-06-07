@@ -27,6 +27,14 @@ def read_csv_file(file_path: Path, cols: list[str] = None) -> pd.DataFrame:
     else:
         print(f"File {file_path} does not exist.")
         return None
+
+def read_excel_file(file_path: Path, cols: list[str] = None) -> pd.DataFrame:
+    if file_path.exists():
+        data = pd.read_excel(file_path, usecols=cols, engine="openpyxl")
+        return data
+    else:
+        print(f"File {file_path} does not exist.")
+        return None
 #########################################    
 # Read holidays data using the holidays library
 # date (str) : yyyy-mm-dd

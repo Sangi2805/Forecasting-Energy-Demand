@@ -7,3 +7,4 @@ mlflow
 python-dotenv
 holidays
 dagshub
+seaborn
