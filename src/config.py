@@ -24,66 +24,81 @@ ELEC_DEMAND_FEATURES = [
 ALL_WEATHER_FEATURES = [
     "time",
 
-    "temperature_2m (°C)",
-    "relative_humidity_2m (%)",
-    "dew_point_2m (°C)",
-    "apparent_temperature (°C)",
+    "temperature_2m",
+    "relative_humidity_2m",
+    "dew_point_2m",
+    "apparent_temperature",
 
-    "precipitation (mm)",
-    "rain (mm)",
-    "snowfall (cm)",
-    "snow_depth (m)",
+    "precipitation",
+    "rain",
+    "snowfall",
+    "snow_depth",
 
-    "weather_code (wmo code)",
+    "weather_code",
 
-    "pressure_msl (hPa)",
-    "surface_pressure (hPa)",
+    "pressure_msl",
+    "surface_pressure",
 
-    "cloud_cover (%)",
-    "cloud_cover_low (%)",
-    "cloud_cover_mid (%)",
-    "cloud_cover_high (%)",
+    "cloud_cover",
+    "cloud_cover_low",
+    "cloud_cover_mid",
+    "cloud_cover_high",
 
-    "et0_fao_evapotranspiration (mm)",
-    "vapour_pressure_deficit (kPa)",
+    "et0_fao_evapotranspiration",
+    "vapour_pressure_deficit",
 
-    "wind_speed_10m (km/h)",
-    "wind_speed_100m (km/h)",
-    "wind_direction_10m (°)",
-    "wind_direction_100m (°)",
-    "wind_gusts_10m (km/h)",
+    "wind_speed_10m",
+    "wind_speed_100m",
+    "wind_direction_10m",
+    "wind_direction_100m",
+    "wind_gusts_10m",
 
-    "soil_temperature_0_to_7cm (°C)",
-    "soil_temperature_7_to_28cm (°C)",
-    "soil_temperature_28_to_100cm (°C)",
-    "soil_temperature_100_to_255cm (°C)",
+    "soil_temperature_0_to_7cm",
+    "soil_temperature_7_to_28cm",
+    "soil_temperature_28_to_100cm",
+    "soil_temperature_100_to_255cm",
 
-    "soil_moisture_0_to_7cm (m³/m³)",
-    "soil_moisture_7_to_28cm (m³/m³)",
-    "soil_moisture_28_to_100cm (m³/m³)",
-    "soil_moisture_100_to_255cm (m³/m³)"
+    "soil_moisture_0_to_7cm",
+    "soil_moisture_7_to_28cm",
+    "soil_moisture_28_to_100cm",
+    "soil_moisture_100_to_255cm"
 ]
 
 SEL_WEATHER_FEATURES = [
     "time",
-    "temperature_2m (°C)",
-    "apparent_temperature (°C)",
-    "relative_humidity_2m (%)",
-    "dew_point_2m (°C)",
-    "precipitation (mm)",
-    "rain (mm)",
-    "snowfall (cm)",
-    "cloud_cover (%)",
-    "wind_speed_10m (km/h)",
-    "wind_gusts_10m (km/h)",
-    "weather_code (wmo code)"
+    "temperature_2m",
+    "apparent_temperature",
+    "relative_humidity_2m",
+    "dew_point_2m",
+    "precipitation",
+    "rain",
+    "snowfall",
+    "cloud_cover",
+    "wind_speed_10m",
+    "wind_gusts_10m",
+    "weather_code"
+]
+
+CORRELATION_HEATMAP_COLUMNS = [
+    "Demand",
+    "temperature_2m",
+    "apparent_temperature",
+    "relative_humidity_2m",
+    "dew_point_2m",
+    "precipitation",
+    "rain",
+    "snowfall",
+    "cloud_cover",
+    "wind_speed_10m",
+    "wind_gusts_10m",
+    "weather_code"
 ]
 
 LAG_WEATHER_FEATURES = [
-    "temperature_2m (°C)",
-    "relative_humidity_2m (%)",
-    "dew_point_2m (°C)",
-    "apparent_temperature (°C)"
+    "temperature_2m",
+    "relative_humidity_2m",
+    "dew_point_2m",
+    "apparent_temperature"
 ]
 
 ##########################################################################
