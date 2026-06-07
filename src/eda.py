@@ -156,9 +156,11 @@ def plot_monthly_mean_demand(
     df, resample_freq='M', aggregation_func='mean', rolling_window=5,
     start_date="2015-07-01",
     end_date="2026-05-30",
-    csv_path=None, fig_path=None,
+    csv_path= cfg.REPORT_DIR / "monthly_mean_demand.csv", 
+    fig_path= cfg.REPORT_DIR / "monthly_mean_demand.png",
     xlabel="Month",
     ylabel="Mean Demand (MW)",
+    
     title="Monthly Mean Electricity Demand"
     ):
     # Generate resampled demand features
@@ -198,7 +200,7 @@ def plot_yearly_mean_demand(
     df, resample_freq='YE', aggregation_func='mean', rolling_window=2,
     start_date="2015-07-01",
     end_date="2026-05-30",
-    csv_path=None, fig_path=None,
+    csv_path= cfg.REPORT_DIR / "yearly_mean_demand.csv", fig_path= cfg.REPORT_DIR / "yearly_mean_demand.png",
     xlabel="Year",
     ylabel="Mean Demand (MW)",
     title="Yearly Mean Electricity Demand"
@@ -450,7 +452,9 @@ def plot_hourly_demand_boxplot(
 
     plt.show()
 
-def plot_mean_demand_by_hour_season(df):
+def plot_mean_demand_by_hour_season(df, 
+    fig_path=cfg.REPORT_DIR / "plot_mean_demand_by_hour_season.png"
+                                    ):
     df = df.copy()
 
     # Convert datetime
@@ -499,13 +503,23 @@ def plot_mean_demand_by_hour_season(df):
     plt.grid(axis='y', alpha=0.3)
     plt.legend(title='Season')
     plt.tight_layout()
+
+    # Save figure
+    if fig_path:
+        plt.savefig(
+            fig_path,
+            bbox_inches="tight"
+        )
+
     plt.show()
 
     return pivot_df 
 #######################################################################    
 #######################################################################    
 
-def plot_mean_demand_by_weekday_season(df):
+def plot_mean_demand_by_weekday_season(df,
+fig_path=cfg.REPORT_DIR / "plot_mean_demand_by_weekday_season.png"
+                                    ):
 
     df = df.copy()
 
@@ -571,6 +585,14 @@ def plot_mean_demand_by_weekday_season(df):
     plt.grid(axis='y', alpha=0.3)
     plt.legend(title='Season')
     plt.tight_layout()
+
+    # Save figure
+    if fig_path:
+        plt.savefig(
+            fig_path,
+            bbox_inches="tight"
+        )
+
     plt.show()
 
     return pivot_df
@@ -578,7 +600,8 @@ def plot_mean_demand_by_weekday_season(df):
 #######################################################################    
 ####################################################################### 
 
-def plot_mean_demand_by_holiday(df):
+def plot_mean_demand_by_holiday(df, 
+        fig_path=cfg.REPORT_DIR / "plot_mean_demand_by_holiday.png"):
 
     df = df.copy()
 
@@ -672,6 +695,12 @@ def plot_mean_demand_by_holiday(df):
     plt.grid(axis='y', alpha=0.3)
     plt.legend(title='Demand Type')
     plt.tight_layout()
+    # Save figure
+    if fig_path:
+        plt.savefig(
+            fig_path,
+            bbox_inches="tight"
+        )
     plt.show()
 
     return comparison_df
@@ -679,7 +708,8 @@ def plot_mean_demand_by_holiday(df):
 #######################################################################    
 ####################################################################### 
 
-def plot_mean_demand_by_month(df):
+def plot_mean_demand_by_month(df, 
+        fig_path=cfg.REPORT_DIR / "plot_mean_demand_by_month.png"):
 
     df = df.copy()
 
@@ -724,6 +754,12 @@ def plot_mean_demand_by_month(df):
     plt.grid(axis='y', alpha=0.3)
 
     plt.tight_layout()
+    # Save figure
+    if fig_path:
+        plt.savefig(
+            fig_path,
+            bbox_inches="tight"
+        )
     plt.show()
 
     return monthly_mean
@@ -882,7 +918,7 @@ def plot_mean_demand_by_weather_range(
     start_date="2015-07-01",
     end_date="2026-05-31",
     n_bins=20,
-    fig_path=None
+    fig_path= cfg.REPORT_DIR / f"mean_demand_by_weather_range.png"
 ):
     df = df.copy()
 
@@ -1101,26 +1137,26 @@ if __name__ == "__main__":
     elec_demand_df["Local time"] = pd.to_datetime(elec_demand_df["Local time"])
 
 
-    #plot_daily_mean_demand(df=elec_demand_df)
-    #plot_monthly_mean_demand(df=elec_demand_df)
-    #plot_yearly_mean_demand(df=elec_demand_df)
-    #plot_monthly_demand_boxplot(elec_demand_df)
-    #plot_mean_demand_by_month(elec_demand_df)
-    #plot_daily_demand_boxplot(elec_demand_df)
-    #plot_mean_demand_by_weekday_season(elec_demand_df)
-    #plot_hourly_demand_boxplot(elec_demand_df)
-    #plot_mean_demand_by_hour_season(elec_demand_df)
-    #plot_mean_demand_by_holiday(elec_demand_df)
-    #plot_mean_demand_by_holiday(elec_demand_df)
+    plot_daily_mean_demand(df=elec_demand_df)
+    plot_monthly_mean_demand(df=elec_demand_df)
+    plot_yearly_mean_demand(df=elec_demand_df)
+    plot_monthly_demand_boxplot(elec_demand_df)
+    plot_mean_demand_by_month(elec_demand_df)
+    plot_daily_demand_boxplot(elec_demand_df)
+    plot_mean_demand_by_weekday_season(elec_demand_df)
+    plot_hourly_demand_boxplot(elec_demand_df)
+    plot_mean_demand_by_hour_season(elec_demand_df)
+    plot_mean_demand_by_holiday(elec_demand_df)
+    plot_mean_demand_by_holiday(elec_demand_df)
     ############
     ##########
-    #plot_scatter_temperature_vs_demand(elec_demand_df)  # do not need
+    plot_scatter_temperature_vs_demand(elec_demand_df)  # do not need
     plot_mean_demand_by_temperature_range(elec_demand_df)
-    #plot_mean_demand_by_humidity_range(elec_demand_df)
-    #plot_mean_demand_by_wind_speed_range(elec_demand_df)
-    #plot_mean_demand_by_snowfall_range(elec_demand_df)
-    #plot_mean_demand_by_apparent_temperature_range(elec_demand_df)
-    #plot_correlation_heatmap(elec_demand_df) # not much useful information
+    plot_mean_demand_by_humidity_range(elec_demand_df)
+    plot_mean_demand_by_wind_speed_range(elec_demand_df)
+    plot_mean_demand_by_snowfall_range(elec_demand_df)
+    plot_mean_demand_by_apparent_temperature_range(elec_demand_df)
+    plot_correlation_heatmap(elec_demand_df) # not much useful information
 
 
 
