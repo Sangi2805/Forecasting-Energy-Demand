@@ -1,2 +1,6 @@
+[core]
+    remote = origin
 ['remote "origin"']
-    url = https://dagshub.com/Sangi2805/Forecasting-Energy-Demand.dvc
+    url = s3://Forecasting-Energy-Demand
+    endpointurl = https://dagshub.com/api/v1/repo-buckets/s3/Sangi2805
+    region = us-east-1
