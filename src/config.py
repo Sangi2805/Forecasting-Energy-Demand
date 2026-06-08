@@ -17,6 +17,13 @@ PROCESSED_DATA_DIR = DATA_DIR / "processed"
 MODEL_DIR = BASE_DIR / "models"
 REPORT_DIR = BASE_DIR / "reports"
 
+
+def get_model_dir(model_name: str) -> Path:
+    """Return (and create) the artifact directory for a model family."""
+    path = MODEL_DIR / model_name
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
 ELEC_DEMAND_FEATURES = [
     "Local time",
     "Demand"

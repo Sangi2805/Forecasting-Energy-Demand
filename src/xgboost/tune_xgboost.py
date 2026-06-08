@@ -17,7 +17,7 @@ from sklearn.metrics import (
 
 # ── Paths via config ──────────────────────────────────────────────────────────
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-from src.config import PROCESSED_DATA_DIR
+from src.config import PROCESSED_DATA_DIR, REPORT_DIR, get_model_dir
 
 dagshub.init(
     repo_owner="Sangi2805",
@@ -142,8 +142,10 @@ with mlflow.start_run(run_name="xgb-sangar-tuned"):
 
     mlflow.sklearn.log_model(best, name="model")
     
-    joblib.dump(best, "models/xgboost_tuned.pkl")
+    model_dir = get_model_dir("xgboost")
+    joblib.dump(best, model_dir / "xgboost_tuned.pkl")
 
     pred_df = pd.DataFrame(preds, index=X_test.index, columns=["pred_day1", "pred_day2", "pred_day3"])
     actual_df = y_test.rename(columns={"target_day1": "actual_day1", "target_day2": "actual_day2", "target_day3": "actual_day3"})
-    pred_df.join(actual_df).to_csv("reports/xgboost_predictions.csv")
+    combined = pred_df.join(actual_df).reset_index().rename(columns={"index": "date"})
+    combined.to_csv(REPORT_DIR / "xgboost_predictions.csv", index=False)
