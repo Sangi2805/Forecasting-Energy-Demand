@@ -74,6 +74,7 @@ def read_weather_data(
             url = "https://api.open-meteo.com/v1/forecast"
         else:       
             url = "https://archive-api.open-meteo.com/v1/archive"
+            
 
         params = {
             "latitude": lat,

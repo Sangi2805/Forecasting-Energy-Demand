@@ -4,6 +4,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import data_collection as dc
+import mlflow
+import config   as cfg
+from config import configure_mlflow_tracking
 
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import (
@@ -24,7 +27,8 @@ from tensorflow.keras.callbacks import EarlyStopping
 # Configuration
 # ==================================================
 
-DATA_PATH = "reports/all_features_dataset.csv"
+DATA_PATH = cfg.REPORT_DIR / "all_features_dataset.csv"
+MODEL_PATH = cfg.MODEL_DIR / "lstm_model.keras"
 
 TARGET_COL = "Demand"
 
@@ -37,7 +41,7 @@ FEATURES = [
     "snowfall",
     "precipitation",
     "cloud_cover",
-    "holiday",
+    "holiday_encoded",
     "hour_sin",
     "hour_cos",
     "weekday_sin",
@@ -55,7 +59,7 @@ TRAIN_RATIO = 0.8
 EPOCHS = 5
 
 BATCH_SIZE = 64
-
+'''
 def encode_holiday_to_numeric(series):
     # Any non-empty holiday label is encoded as 1, otherwise 0.
     cleaned = series.fillna(0).astype(str).str.strip().str.lower()
@@ -101,6 +105,7 @@ def add_cyclical_features(df_input):
     df_output["month_cos"] = np.cos(2 * np.pi * (month_series - 1) / 12.0)
 
     return df_output
+'''
 # ==================================================
 # Load Data
 # ==================================================
@@ -115,9 +120,9 @@ def train_lstm():
         .str.replace(",", "", regex=False)
     )
 
-    df["holiday"] = encode_holiday_to_numeric(df["holiday"])
+    #df["holiday"] = encode_holiday_to_numeric(df["holiday"])
 
-    df = add_cyclical_features(df)
+    #df = add_cyclical_features(df)
 
     df = df.dropna()
 
@@ -329,19 +334,27 @@ def train_lstm():
     print(f"MAPE : {mape:.2f}%")
     print(f"MAPE excluded zero-demand points: {excluded_zeros}")
 
+    # Log metrics to MLflow
+    #mlflow.log_metric("MAE", mae)
+    #mlflow.log_metric("RMSE", rmse)
+    #mlflow.log_metric("MAPE", mape)
+    #mlflow.log_param("excluded_zeros", excluded_zeros)
+
 
 
     # ==================================================
     # Save Model
     # ==================================================
 
+    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+
     model.save(
-        "models/lstm_model.keras"
+        MODEL_PATH
     )
 
     print(
         "\nModel saved:"
-        " models/lstm_model.keras"
+        f" {MODEL_PATH}"
     )
 
 

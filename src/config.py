@@ -90,8 +90,7 @@ CORRELATION_HEATMAP_COLUMNS = [
     "snowfall",
     "cloud_cover",
     "wind_speed_10m",
-    "wind_gusts_10m",
-    "weather_code"
+    "wind_gusts_10m"
 ]
 
 LAG_WEATHER_FEATURES = [
@@ -117,12 +116,32 @@ MODEL_NAME = "xgboost_model.pkl"
 import os
 import mlflow
 
-MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI")
-DAGSHUB_USER_NAME = os.getenv("DAGSHUB_USER_NAME")
-DAGSHUB_TOKEN = os.getenv("DAGSHUB_TOKEN")
+def configure_mlflow_tracking():
+    dagshub_user = os.getenv("DAGSHUB_USER_NAME")
+    dagshub_token = os.getenv("DAGSHUB_TOKEN")
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
 
-if MLFLOW_TRACKING_URI and DAGSHUB_TOKEN:
-    os.environ["MLFLOW_TRACKING_USERNAME"] = DAGSHUB_USER_NAME
-    os.environ["MLFLOW_TRACKING_PASSWORD"] = DAGSHUB_TOKEN
-    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    missing_vars = [
+        name
+        for name, value in {
+            "DAGSHUB_USER_NAME": dagshub_user,
+            "DAGSHUB_TOKEN": dagshub_token,
+            "MLFLOW_TRACKING_URI": tracking_uri
+        }.items()
+        if not value
+    ]
+
+    if missing_vars:
+        raise RuntimeError(
+            "Missing DagsHub MLflow configuration: "
+            f"{', '.join(missing_vars)}. "
+            "Local MLflow tracking is disabled."
+        )
+
+    os.environ.setdefault("MLFLOW_TRACKING_USERNAME", dagshub_user)
+    os.environ.setdefault("MLFLOW_TRACKING_PASSWORD", dagshub_token)
+    mlflow.set_tracking_uri(tracking_uri)
+    print(f"[OK] MLflow configured for DagsHub at {tracking_uri}")
+
+    return tracking_uri
 
