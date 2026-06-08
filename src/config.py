@@ -19,7 +19,8 @@ REPORT_DIR = BASE_DIR / "reports"
 
 ELEC_DEMAND_FEATURES = [
     "Local time",
-    "Demand"
+    "Demand",
+    "Hour"
 ]
 ALL_WEATHER_FEATURES = [
     "time",
@@ -75,9 +76,8 @@ SEL_WEATHER_FEATURES = [
     "snowfall",
     "cloud_cover",
     "wind_speed_10m",
-    "wind_gusts_10m",
-    "weather_code"
-]
+    "wind_gusts_10m"
+    ]
 
 CORRELATION_HEATMAP_COLUMNS = [
     "Demand",
@@ -105,8 +105,8 @@ LAG_WEATHER_FEATURES = [
 # Project Root Directory
 ##########################################################################
 
-TARGET_VARIABLE = "demand"
-FED_FEATURES = ["temperature_2m (°C)", "relative_humidity_2m (%)", "wind_speed_10m (km/h)", "hour_of_day", "day_of_week"]
+TARGET_VARIABLE = "Demand"
+FED_FEATURES = ["temperature_2m", "relative_humidity_2m", "wind_speed_10m", "hour_of_day", "day_of_week"]
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
 MODEL_NAME = "xgboost_model.pkl"
