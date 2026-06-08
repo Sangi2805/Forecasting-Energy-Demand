@@ -1,7 +1,10 @@
+import sys
+import os
 import pandas as pd
 import dagshub
 import mlflow
 import mlflow.sklearn
+import joblib
 
 from xgboost import XGBRegressor
 from sklearn.multioutput import MultiOutputRegressor
@@ -12,6 +15,10 @@ from sklearn.metrics import (
     mean_absolute_percentage_error,
 )
 
+# ── Paths via config ──────────────────────────────────────────────────────────
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+from src.config import PROCESSED_DATA_DIR
+
 dagshub.init(
     repo_owner="Sangi2805",
     repo_name="Forecasting-Energy-Demand",
@@ -21,13 +28,13 @@ dagshub.init(
 mlflow.set_experiment("energy-demand-forecasting")
 
 train = pd.read_csv(
-    "data/processed/features_selected_train.csv",
+    PROCESSED_DATA_DIR / "features_selected_train.csv",
     index_col="date",
     parse_dates=["date"]
 )
 
 test = pd.read_csv(
-    "data/processed/features_selected_test.csv",
+    PROCESSED_DATA_DIR / "features_selected_test.csv",
     index_col="date",
     parse_dates=["date"]
 )
@@ -134,3 +141,9 @@ with mlflow.start_run(run_name="xgb-sangar-tuned"):
     print(f"avg_rmse = {sum(rmse_list)/3:,.2f}")
 
     mlflow.sklearn.log_model(best, name="model")
+    
+    joblib.dump(best, "models/xgboost_tuned.pkl")
+
+    pred_df = pd.DataFrame(preds, index=X_test.index, columns=["pred_day1", "pred_day2", "pred_day3"])
+    actual_df = y_test.rename(columns={"target_day1": "actual_day1", "target_day2": "actual_day2", "target_day3": "actual_day3"})
+    pred_df.join(actual_df).to_csv("reports/xgboost_predictions.csv")
