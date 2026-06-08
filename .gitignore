@@ -4,6 +4,7 @@ models/**
 !models/**/
 !data/**/.gitkeep
 !models/**/.gitkeep
+!models/**/*.pkl
 !data/**/*.dvc
 .env
 __pycache__/
@@ -11,3 +12,4 @@ __pycache__/
 .venv*/
 mlruns/
 *.csv
+!reports/*_predictions.csv
