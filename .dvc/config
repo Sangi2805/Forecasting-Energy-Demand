@@ -1,0 +1,4 @@
+[core]
+    remote = origin
+['remote "origin"']
+    url = https://dagshub.com/Sangi2805/Forecasting-Energy-Demand.dvc

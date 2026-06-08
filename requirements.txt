@@ -1,0 +1,15 @@
+streamlit==1.58.0
+plotly
+pandas
+numpy
+openpyxl
+mlflow
+python-dotenv
+holidays
+dagshub
+dvc
+prophet
+lightgbm
+scikit-learn
+matplotlib
+statsmodels

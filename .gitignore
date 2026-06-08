@@ -1,0 +1,13 @@
+data/**
+models/**
+!data/**/
+!models/**/
+!data/**/.gitkeep
+!models/**/.gitkeep
+!data/**/*.dvc
+.env
+__pycache__/
+*.pyc
+.venv*/
+mlruns/
+*.csv
