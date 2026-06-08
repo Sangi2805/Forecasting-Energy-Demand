@@ -115,14 +115,27 @@ MODEL_NAME = "xgboost_model.pkl"
 ##########################################################################
 
 import os
+
+import dagshub
 import mlflow
 
-MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI")
-DAGSHUB_USER_NAME = os.getenv("DAGSHUB_USER_NAME")
+DAGSHUB_USER_NAME = os.getenv("DAGSHUB_USER_NAME", "Sangi2805")
+DAGSHUB_REPO_NAME = os.getenv("DAGSHUB_REPO_NAME", "Forecasting-Energy-Demand")
 DAGSHUB_TOKEN = os.getenv("DAGSHUB_TOKEN")
+MLFLOW_TRACKING_URI = os.getenv(
+    "MLFLOW_TRACKING_URI",
+    f"https://dagshub.com/{DAGSHUB_USER_NAME}/{DAGSHUB_REPO_NAME}.mlflow",
+)
 
-if MLFLOW_TRACKING_URI and DAGSHUB_TOKEN:
+if DAGSHUB_TOKEN:
+    os.environ["DAGSHUB_USER_TOKEN"] = DAGSHUB_TOKEN
     os.environ["MLFLOW_TRACKING_USERNAME"] = DAGSHUB_USER_NAME
     os.environ["MLFLOW_TRACKING_PASSWORD"] = DAGSHUB_TOKEN
-    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+
+dagshub.init(
+    repo_owner=DAGSHUB_USER_NAME,
+    repo_name=DAGSHUB_REPO_NAME,
+    mlflow=True,
+)
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 

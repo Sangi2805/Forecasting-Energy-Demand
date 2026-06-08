@@ -7,3 +7,9 @@ mlflow
 python-dotenv
 holidays
 dagshub
+dvc
+prophet
+lightgbm
+scikit-learn
+matplotlib
+statsmodels
