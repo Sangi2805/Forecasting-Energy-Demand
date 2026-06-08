@@ -1,24 +1,34 @@
 import matplotlib.pyplot as plt
 import pandas as pd
+from streamlit import columns
 import data_collection as dc
 import config as cfg
+import seaborn as sns   
 
-
-###################################
-# Plot electricity demand over time
+# Define seasons
+def get_season(month):
+    if month in [3, 4, 5]:
+        return 'Spring'
+    elif month in [6, 7, 8]:
+        return 'Summer'
+    elif month in [9, 10, 11]:
+        return 'Fall'
+    else:
+        return 'Winter'
+###############################################################################
+# Generate resampled demand features.
 # df: DataFrame with columns 'Local time' and 'Demand'
 # resample_freq:  'D', 'W', 'ME' and 'YE'
 # aggregation_func: 'sum', 'mean', 'median', 'min' and 'max', 'std'
+# rolling_window: int, number of periods for rolling mean
 # start_date: 'YYYY-MM-DD'
 # end_date:  'YYYY-MM-DD'
-###################################
-def plot_electricity_demand_over_time(
-    df, resample_freq='D', aggregation_func='sum', rolling_window=30,
+#############################################################################
+def generate_resampled_demand_features(
+    df, resample_freq='D', aggregation_func='mean', rolling_window=10,
     start_date=None,
-    end_date=None,
-    csv_path=None, fig_path=None
+    end_date=None
     ):
-
     df = df.copy()
     # Remove commas and convert to numeric
     df['Demand'] = pd.to_numeric(
@@ -38,19 +48,43 @@ def plot_electricity_demand_over_time(
          .reset_index()
         )
     #Rolling mean
-    Sample_freq_df[f'Rolling_{rolling_window}d'] = Sample_freq_df['Demand'].rolling(window=rolling_window).mean()     
+    Sample_freq_df[f'Rolling_{rolling_window}d'] = Sample_freq_df['Demand'].rolling(window=rolling_window).mean()   
+    return Sample_freq_df
 
-    # Plotting
+###############################################################################
+# Plot electricity demand over time with rolling mean.
+# df: DataFrame with columns 'Local time' and 'Demand'
+# resample_freq:  'D', 'W', 'ME' and 'YE'
+# aggregation_func: 'sum', 'mean', 'median', 'min' and 'max', 'std'
+# rolling_window: int, number of periods for rolling mean
+# start_date: 'YYYY-MM-DD'
+# end_date:  'YYYY-MM-DD'
+# csv_path: str or Path, optional, path to save the resampled data as CSV
+# fig_path: str or Path, optional, path to save the plot as PNG or SVG
+# xlabel: str, label for x-axis
+# ylabel: str, label for y-axis
+# title: str, title of the plot
+#############################################################################
+def plot_and_save( 
+        Sample_freq_df, 
+        resample_freq,
+        rolling_window, 
+        csv_path, fig_path,
+        xlabel,
+        ylabel,
+        title
+        ):
+    
     plt.figure(figsize=(13,5))
-    plt.plot(Sample_freq_df['Local time'], Sample_freq_df['Demand'])
-    plt.plot(Sample_freq_df['Local time'], Sample_freq_df[f'Rolling_{rolling_window}d'], label=f'Rolling Mean ({rolling_window} periods)', color='orange')
+    plt.plot(Sample_freq_df['Local time'], Sample_freq_df['Demand'], label=f'{title}', color='blue')
+    plt.plot(Sample_freq_df['Local time'], Sample_freq_df[f'Rolling_{rolling_window}d'], label=f'Rolling Mean ({rolling_window} periods ({resample_freq}))', color='orange')
 
-    plt.title("Electricity Demand")
-    plt.xlabel(f"Time ({resample_freq})")
-    plt.ylabel(f"Demand ({aggregation_func})")
+    plt.title(title)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.legend()
     plt.grid(True)
-
-    # Save to CSV and png
+     # Save to CSV and svg
     if csv_path:
         Sample_freq_df.to_csv(csv_path, index=False)
     else:
@@ -63,6 +97,45 @@ def plot_electricity_demand_over_time(
 
     plt.show()
 
+######################################################################
+# Plot daily mean electricity demand over time with rolling mean.
+# df: DataFrame with columns 'Local time' and 'Demand'
+# resample_freq:  'D', 'W', 'ME' and 'YE'
+# aggregation_func: 'sum', 'mean', 'median', 'min' and 'max', 'std'
+# start_date: 'YYYY-MM-DD'
+# end_date:  'YYYY-MM-DD'
+# rolling_window: int, number of periods for rolling mean
+# csv_path: str or Path, optional, path to save the resampled data as CSV
+# fig_path: str or Path, optional, path to save the plot as PNG or SVG
+# xlabel: str, label for x-axis
+# ylabel: str, label for y-axis
+# title: str, title of the plot
+#####################################################################
+def plot_daily_mean_demand(
+    df, resample_freq='D', aggregation_func='mean', rolling_window=15,
+    start_date="2015-07-01",
+    end_date="2026-05-30",
+    csv_path=None, fig_path=None,
+    xlabel="Date",
+    ylabel="Mean Demand (MW)",
+    title="Daily Mean Electricity Demand"
+    ):
+    # Generate resampled demand features
+    Sample_freq_df= Sample_freq_df = generate_resampled_demand_features(
+        df, resample_freq=resample_freq, aggregation_func=aggregation_func,
+        rolling_window=rolling_window, start_date=start_date, end_date=end_date
+    )
+
+    # Plot and save 
+    plot_and_save( 
+        Sample_freq_df,
+        resample_freq, 
+        rolling_window, 
+        csv_path, fig_path,
+        xlabel,
+        ylabel,
+        title
+        )
     return Sample_freq_df
 
 ######################################################################
@@ -156,12 +229,13 @@ def plot_yearly_mean_demand(
 #start_date : str, optional e.g. '2015-07-01'.
 #end_date : str, optional e.g. '2026-05-31'.
 #fig_path : str or Path, optional
-###################################
+#######################################################################    
+
 def plot_monthly_demand_boxplot(
     df,
-    start_date=None,
-    end_date=None,
-    fig_path=None
+    start_date="2015-07-01",
+    end_date="2026-05-31",
+    fig_path= cfg.REPORT_DIR / "monthly_demand_boxplot.png"
 ):
   
     df = df.copy()
@@ -184,7 +258,7 @@ def plot_monthly_demand_boxplot(
     # Month names
     df['month'] = df['Local time'].dt.month_name()
 
-    # Ensure correct month order
+    # Month order
     month_order = [
         'January', 'February', 'March', 'April',
         'May', 'June', 'July', 'August',
@@ -200,6 +274,14 @@ def plot_monthly_demand_boxplot(
     # Create figure and axis
     fig, ax = plt.subplots(figsize=(12, 6))
 
+    # Example 
+    '''
+    ax.plot(
+        df['Local time'],
+        df['Demand']
+    )
+    '''
+    # Boxplot of demand by month
     df.boxplot(
         column='Demand',
         by='month',
@@ -213,7 +295,7 @@ def plot_monthly_demand_boxplot(
 
     # Remove automatic pandas title
     plt.suptitle("")
-
+     
     plt.tight_layout()
 
     # Save figure
@@ -226,18 +308,19 @@ def plot_monthly_demand_boxplot(
 
     plt.show()
 
-###################################
-# Plot Weekday boxplot of electricity demand.
+######################################################################
+# Plot monthly boxplot of electricity demand.
 # df: DataFrame with columns 'Local time' and 'Demand'
 #start_date : str, optional e.g. '2015-07-01'.
 #end_date : str, optional e.g. '2026-05-31'.
 #fig_path : str or Path, optional
-###################################
-def plot_weekday_demand_boxplot(
+#######################################################################    
+
+def plot_daily_demand_boxplot(
     df,
-    start_date=None,
-    end_date=None,
-    fig_path=None
+    start_date="2015-07-01",
+    end_date="2026-05-31",
+    fig_path=   cfg.REPORT_DIR / "daily_demand_boxplot.png"
 ):
 
     df = df.copy()
@@ -286,7 +369,7 @@ def plot_weekday_demand_boxplot(
         ax=ax
     )
 
-    ax.set_title("Electricity Demand Distribution by Weekday")
+    ax.set_title("Electricity Demand Distribution by day")
     ax.set_xlabel("Day of Week")
     ax.set_ylabel("Demand (MW)")
     ax.grid(True)
@@ -1050,9 +1133,8 @@ def plot_correlation_heatmap(
 if __name__ == "__main__":
 
     # Load the electricity demand data
-    elec_demand_df = dc.read_csv_file(cfg.REPORT_DIR / "all_features_dataset.csv", cols=["Local time", "Demand"])
+    elec_demand_df = dc.read_csv_file(cfg.REPORT_DIR / "all_features_dataset.csv")
     elec_demand_df["Local time"] = pd.to_datetime(elec_demand_df["Local time"])
-
 
     plot_daily_mean_demand(df=elec_demand_df)
     plot_monthly_mean_demand(df=elec_demand_df)
