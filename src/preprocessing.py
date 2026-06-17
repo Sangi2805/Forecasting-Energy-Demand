@@ -3,13 +3,19 @@ from streamlit import columns
 import config as cfg
 import data_collection as dc
 import os
+import re
 
 
 def read_elec_demand_data():
-    return dc.read_csv_file(cfg.RAW_DATA_DIR / "electricity_demand_data.csv", cols=cfg.ELEC_DEMAND_FEATURES)   # all columns are needed for electricity demand data
+    df = dc.read_csv_file(cfg.RAW_DATA_DIR / "electricity_demand_data.csv")
+    df = remove_units_from_column_names(df)
+    return df[cfg.ELEC_DEMAND_FEATURES]   # all columns are needed for electricity demand data
     
 def read_weather_data():
-    return dc.read_csv_file(cfg.RAW_DATA_DIR / "weather_data.csv", cols=cfg.SEL_WEATHER_FEATURES)   # all columns are needed for weather data
+    df = dc.read_csv_file(cfg.RAW_DATA_DIR / "weather_data.csv")
+    df = remove_units_from_column_names(df)
+    return df[cfg.SEL_WEATHER_FEATURES]   # all columns are needed for weather data
+    #return dc.read_csv_file(cfg.RAW_DATA_DIR / "weather_data.csv", cols=cfg.SEL_WEATHER_FEATURES)   # all columns are needed for weather data
 
 def read_GDP_data():
     return dc.read_csv_file(cfg.RAW_DATA_DIR / "gdp_data.csv")   # all columns are needed for GDP data
@@ -93,6 +99,14 @@ def add_previous_day_avg_weather_features(merged_df):
 
     return merged_df
 
+def remove_units_from_column_names(df):
+    df = df.copy()
+    df.rename(
+        columns=lambda col: re.sub(r"\s*\([^)]*\)", "", col).strip(),
+        inplace=True
+    )
+    return df
+
 #process data
 
 def process_data():
@@ -127,13 +141,15 @@ def process_data():
     
     merged_df["day_of_week"] = merged_df["date"].dt.day_name()
     merged_df = add_previous_day_avg_weather_features(merged_df)
+    #merged_df = remove_units_from_column_names(merged_df)
     
+    # 
     # step 4: zero imputation for missing values in merged_df
     merged_df.fillna(0, inplace=True)
       
-   
-
     return merged_df
+
+
 
 def test():
     #dc.read_col_names(cfg.RAW_DATA_DIR / "weather_data.csv")
