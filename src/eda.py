@@ -1150,9 +1150,9 @@ if __name__ == "__main__":
     ############
     ##########
     #plot_scatter_temperature_vs_demand(elec_demand_df)  # do not need
-    #plot_mean_demand_by_temperature_range(elec_demand_df)
+    plot_mean_demand_by_temperature_range(elec_demand_df)
     #plot_mean_demand_by_humidity_range(elec_demand_df)
     #plot_mean_demand_by_wind_speed_range(elec_demand_df)
     #plot_mean_demand_by_snowfall_range(elec_demand_df)
     #plot_mean_demand_by_apparent_temperature_range(elec_demand_df)
-    plot_correlation_heatmap(elec_demand_df) # not much useful information
+    #plot_correlation_heatmap(elec_demand_df) # not much useful information

@@ -191,9 +191,37 @@ def process_data():
         population_df,
         holiday_df
     )
+    # Convert 'Demand' to numeric
+    elec_demand_df = Convert_Demand_To_Numeric(elec_demand_df)
+    # step 4: create lag features
+    elec_demand_df["demand_lag_1h"] = elec_demand_df["Demand"].shift(1)
+    elec_demand_df["demand_lag_2h"] = elec_demand_df["Demand"].shift(2)
+
+    elec_demand_df["demand_lag_3h"] = elec_demand_df["Demand"].shift(3)
+    elec_demand_df["demand_lag_4h"] = elec_demand_df["Demand"].shift(4)
+
+    elec_demand_df["demand_lag_24h"] = elec_demand_df["Demand"].shift(24)
+    elec_demand_df["demand_lag_48h"] = elec_demand_df["Demand"].shift(48)
+    elec_demand_df["demand_lag_72h"] = elec_demand_df["Demand"].shift(72)
+
+    elec_demand_df["demand_rolling_24h_mean"] = elec_demand_df["Demand"].shift(1).rolling(24).mean()
+    elec_demand_df["demand_rolling_168h_mean"] = elec_demand_df["Demand"].shift(1).rolling(168).mean()  
    
+    # Std
+    elec_demand_df["demand_std_24h"] = elec_demand_df["Demand"].rolling(24).std()
+    elec_demand_df["demand_std_168h"] = elec_demand_df["Demand"].rolling(168).std()
+
+    # Min
+    elec_demand_df["demand_min_24h"] = elec_demand_df["Demand"].rolling(24).min()
+
+    # Max
+    elec_demand_df["demand_max_24h"] = elec_demand_df["Demand"].rolling(24).max()
+
+
+    ########################
     # Encode weekday to numeric
     merged_df = pd.merge(elec_demand_df, holiday_df, left_on='date', right_on='date', how='left')
+
 
     merged_df = add_hour_weekday_month_encoded_features(merged_df)
     
@@ -204,7 +232,7 @@ def process_data():
     merged_df = pd.merge(merged_df, population_df, left_on='year', right_on='year', how='left')
        
 
-    merged_df = add_previous_day_avg_weather_features(merged_df)
+    #merged_df = add_previous_day_avg_weather_features(merged_df)
 
     merged_df = remove_units_from_column_names(merged_df)
     
@@ -214,8 +242,12 @@ def process_data():
     #drop unnecessary columns
     merged_df.drop(columns=["time", "observation_date_x", "observation_date_y"], inplace=True)
 
-    # step 4: zero imputation for missing values in merged_df
+    
+
+
+    # step 5 zero imputation for missing values in merged_df
     merged_df.fillna(0, inplace=True)
+
       
     return merged_df
 
