@@ -1,5 +1,4 @@
 import json
-from pyexpat import model
 import random
 
 import mlflow
@@ -77,8 +76,8 @@ FEATURES = [
     "NYPOP",
 ]
 
-WINDOW_SIZE = 24 * 1
-FORECAST_HORIZON = 1
+WINDOW_SIZE = 24 * 7
+FORECAST_HORIZON = 72
 
 TRAIN_END_DATE = "2024-04-30"
 VALIDATION_START_DATE = "2024-05-01"
@@ -86,10 +85,13 @@ VALIDATION_END_DATE = "2025-04-30"
 TEST_START_DATE = "2025-05-01"
 TEST_END_DATE = "2026-04-30"
 
-EPOCHS = 10
+EPOCHS = 50
 BATCH_SIZE = 64
 DROPOUT_RATE = 0.2
 EARLY_STOPPING_PATIENCE = 5
+  
+PERMUTATION_SAMPLE_SIZE = 500
+RUN_PERMUTATION_IMPORTANCE = False
 
 SEED = 42
 
@@ -151,13 +153,13 @@ def build_lstm_model():
     )
 
     optimizer = tf.keras.optimizers.Adam(
-    learning_rate=0.001,
-    clipnorm=1.0,
+        learning_rate=0.001,
+        clipnorm=1.0,
     )
 
     model.compile(
-    optimizer=optimizer,
-    loss="mse",
+        optimizer=optimizer,
+        loss="mse",
     )
 
     return model
@@ -189,6 +191,22 @@ def save_forecast_plot(y_test_flat, y_pred_flat, output_path, limit=500):
     plt.close()
 
 
+def save_permutation_importance_plot(importance_df, output_path):
+    plt.figure(figsize=(10, 10))
+
+    plt.barh(
+        importance_df["feature"],
+        importance_df["importance"],
+    )
+
+    plt.xlabel("Increase in MAE")
+    plt.title("Permutation Importance")
+    plt.gca().invert_yaxis()
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+
+
 def calculate_mape(y_true, y_pred, epsilon=1e-6):
     nonzero_mask = np.abs(y_true) > epsilon
     excluded_zeros = np.size(y_true) - np.count_nonzero(nonzero_mask)
@@ -207,6 +225,110 @@ def calculate_mape(y_true, y_pred, epsilon=1e-6):
         mape = np.nan
 
     return mape, excluded_zeros
+
+
+def evaluate_mae(model, X, y_true, scaler, batch_size=64):
+    y_pred = model.predict(
+        X,
+        batch_size=batch_size,
+        verbose=0,
+    )
+
+    y_pred_real = inverse_transform_target_sequences(
+        scaler,
+        y_pred,
+    )
+
+    y_true_real = inverse_transform_target_sequences(
+        scaler,
+        y_true,
+    )
+
+    mae = mean_absolute_error(
+        y_true_real.flatten(),
+        y_pred_real.flatten(),
+    )
+
+    return mae
+
+
+def permutation_importance(
+    model,
+    X_test,
+    y_test,
+    scaler,
+    feature_names,
+    sample_size=500,
+    batch_size=64,
+    random_state=42,
+):
+    rng = np.random.default_rng(random_state)
+
+    n_samples = min(sample_size, len(X_test))
+
+    sample_idx = rng.choice(
+        len(X_test),
+        size=n_samples,
+        replace=False,
+    )
+
+    X_sample = X_test[sample_idx].copy()
+    y_sample = y_test[sample_idx].copy()
+
+    baseline_mae = evaluate_mae(
+        model=model,
+        X=X_sample,
+        y_true=y_sample,
+        scaler=scaler,
+        batch_size=batch_size,
+    )
+
+    print("\n===== PERMUTATION IMPORTANCE =====")
+    print(f"Sample size: {n_samples}")
+    print(f"Baseline MAE on sampled test set: {baseline_mae:.3f}")
+    print("-" * 60)
+
+    results = []
+
+    for feature_idx, feature_name in enumerate(feature_names):
+        X_perm = X_sample.copy()
+
+        perm_idx = rng.permutation(n_samples)
+
+        X_perm[:, :, feature_idx] = X_perm[perm_idx, :, feature_idx]
+
+        permuted_mae = evaluate_mae(
+            model=model,
+            X=X_perm,
+            y_true=y_sample,
+            scaler=scaler,
+            batch_size=batch_size,
+        )
+
+        importance = permuted_mae - baseline_mae
+
+        results.append(
+            {
+                "feature": feature_name,
+                "baseline_mae": baseline_mae,
+                "permuted_mae": permuted_mae,
+                "importance": importance,
+            }
+        )
+
+        print(
+            f"{feature_idx + 1:02d}/{len(feature_names)} "
+            f"{feature_name:35s} "
+            f"importance = {importance:.3f}"
+        )
+
+    importance_df = (
+        pd.DataFrame(results)
+        .sort_values("importance", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    return importance_df
 
 
 def log_mlflow_run_metadata(df, train_df, val_df, test_df, X_train, X_val, X_test):
@@ -249,7 +371,7 @@ def log_mlflow_run_metadata(df, train_df, val_df, test_df, X_train, X_val, X_tes
         "test_sequence_count": len(X_test),
 
         "seed": SEED,
-        "lstm_architecture": "Input_LSTM128_LSTM64_Dense72",
+        "lstm_architecture": "Input_LSTM128_LSTM64_Dense",
 
         "reduce_lr_on_plateau": True,
         "reduce_lr_factor": 0.5,
@@ -258,6 +380,8 @@ def log_mlflow_run_metadata(df, train_df, val_df, test_df, X_train, X_val, X_tes
         "scaler_fit_on": "train_only",
         "validation_history_context_hours": WINDOW_SIZE,
         "test_history_context_hours": WINDOW_SIZE,
+
+        "permutation_importance_sample_size": PERMUTATION_SAMPLE_SIZE,
     }
 
     mlflow.log_params(params)
@@ -272,37 +396,31 @@ def train_lstm():
 
     missing_raw_columns = [TARGET_COL, "date"]
     missing_raw_columns = [col for col in missing_raw_columns if col not in df.columns]
+
     if missing_raw_columns:
         raise KeyError(f"Missing required columns in dataset: {missing_raw_columns}")
 
-    # Convert target to numeric
     df[TARGET_COL] = pd.to_numeric(
         df[TARGET_COL].astype(str).str.replace(",", "", regex=False),
         errors="coerce",
     )
 
-    # Convert date column
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
-    # Sort by time
     df = df.sort_values("date").reset_index(drop=True)
 
     missing_features = [feature for feature in FEATURES if feature not in df.columns]
+
     if missing_features:
         raise KeyError(f"Missing features in dataset: {missing_features}")
 
-    # Keep only date + selected features
     df = df[["date"] + FEATURES].copy()
 
-    # Drop missing values
     df = df.dropna().reset_index(drop=True)
 
     print("Data shape:", df.shape)
     print("Date range:", df["date"].min(), "to", df["date"].max())
 
-    # ==================================================
-    # Split by date: Train / Validation / Test
-    # ==================================================
     print("Splitting data by date...")
 
     train_end = pd.to_datetime(TRAIN_END_DATE)
@@ -348,18 +466,12 @@ def train_lstm():
     print("Rows:", len(test_df))
     print("=" * 60)
 
-    # ==================================================
-    # Scaling
-    # ==================================================
     print("Scaling data...")
 
     scaler = MinMaxScaler()
 
-    # Fit scaler only on training data to avoid data leakage
     train_scaled = scaler.fit_transform(train_df[FEATURES])
 
-    # Add last WINDOW_SIZE rows from train to validation input
-    # so the first validation sequence has enough historical context.
     val_input_df = pd.concat(
         [train_df.tail(WINDOW_SIZE), val_df],
         ignore_index=True,
@@ -367,8 +479,6 @@ def train_lstm():
 
     val_scaled = scaler.transform(val_input_df[FEATURES])
 
-    # Add last WINDOW_SIZE rows from validation to test input
-    # so the first test sequence has enough historical context.
     test_input_df = pd.concat(
         [val_df.tail(WINDOW_SIZE), test_df],
         ignore_index=True,
@@ -376,9 +486,6 @@ def train_lstm():
 
     test_scaled = scaler.transform(test_input_df[FEATURES])
 
-    # ==================================================
-    # Create sliding windows
-    # ==================================================
     print("Creating training sequences...")
     X_train, y_train = create_sequences(train_scaled)
 
@@ -395,7 +502,7 @@ def train_lstm():
     print("Test X shape :", X_test.shape)
     print("Test y shape :", y_test.shape)
 
-    with mlflow.start_run(run_name="lstm_Toan_train_val_test_2layer"):
+    with mlflow.start_run(run_name="lstm_Toan_permutation_importance_analysis") as run:
         log_mlflow_run_metadata(
             df=df,
             train_df=train_df,
@@ -443,7 +550,11 @@ def train_lstm():
             mlflow.log_metric("val_loss", float(val_loss), step=step)
 
         print("Predicting on test set...")
-        y_pred = model.predict(X_test)
+        y_pred = model.predict(
+            X_test,
+            batch_size=BATCH_SIZE,
+            verbose=1,
+        )
 
         y_pred_real = inverse_transform_target_sequences(scaler, y_pred)
         y_test_real = inverse_transform_target_sequences(scaler, y_test)
@@ -491,10 +602,64 @@ def train_lstm():
         save_training_loss_plot(history, training_loss_plot_path)
         save_forecast_plot(y_test_flat, y_pred_flat, forecast_plot_path)
 
+        
+        # run permutation importance analysis if enabled
+        if RUN_PERMUTATION_IMPORTANCE:
+            print("\nRunning permutation importance analysis...")
+
+            importance_df = permutation_importance(
+                model=model,
+                X_test=X_test,
+                y_test=y_test,
+                scaler=scaler,
+                feature_names=FEATURES,
+                sample_size=PERMUTATION_SAMPLE_SIZE,
+                batch_size=BATCH_SIZE,
+                random_state=SEED,
+            )
+            print("\n===== TOP FEATURE IMPORTANCE =====")
+            print(importance_df.head(20))
+
+            importance_csv_path = PLOT_DIR / "permutation_importance.csv"
+            importance_plot_path = PLOT_DIR / "permutation_importance.png"
+
+            importance_df.to_csv(
+                importance_csv_path,
+                index=False,
+                )
+
+            save_permutation_importance_plot(
+                importance_df,
+                importance_plot_path,
+                )
+
+            # End of permutation importance analysis
+            # Log permutation importance results to MLflow
+
+            mlflow.log_artifact(
+                str(importance_csv_path),
+                artifact_path="feature_importance",
+            )
+
+            mlflow.log_artifact(
+                str(importance_plot_path),
+                artifact_path="feature_importance",
+            )
+
+            mlflow.log_text(
+                importance_df.to_json(orient="records", indent=2),
+                "feature_importance/permutation_importance.json",
+            )
+
+            print(f"\nPermutation importance CSV saved: {importance_csv_path}")
+            print(f"Permutation importance plot saved: {importance_plot_path}")
+
+            # End of permutation importance analysis logging
+
+        # Log artifacts to MLflow
         mlflow.log_artifact(str(MODEL_PATH), artifact_path="model")
         mlflow.log_artifact(str(training_loss_plot_path), artifact_path="plots")
         mlflow.log_artifact(str(forecast_plot_path), artifact_path="plots")
-
         print("MLflow run logged successfully.")
 
 
