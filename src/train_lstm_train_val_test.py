@@ -1,17 +1,20 @@
 import json
+from pyexpat import model
+import random
 
 import mlflow
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import tensorflow as tf
 
 import config as cfg
 from config import configure_mlflow_tracking
 
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.callbacks import EarlyStopping
-from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.layers import Input, LSTM, Dense, Dropout
 from tensorflow.keras.models import Sequential
 
 
@@ -21,7 +24,6 @@ from tensorflow.keras.models import Sequential
 DATA_PATH = cfg.REPORT_DIR / "all_features_dataset.csv"
 MODEL_PATH = cfg.MODEL_DIR / "lstm_model.keras"
 PLOT_DIR = cfg.REPORT_DIR / "plots"
-
 
 TARGET_COL = "Demand"
 
@@ -34,70 +36,85 @@ FEATURES = [
     "snowfall",
     "precipitation",
     "cloud_cover",
-    "holiday_encoded",  #
+    "holiday_encoded",
+
     "hour_sin",
     "hour_cos",
     "weekday_sin",
     "weekday_cos",
     "month_sin",
     "month_cos",
-    #"date",
-    #####
+
     "demand_lag_1h",
     "demand_lag_2h",
     "demand_lag_3h",
-    "demand_lag_4h", 
+    "demand_lag_4h",
     "demand_lag_24h",
     "demand_lag_48h",
     "demand_lag_72h",
+
     "demand_rolling_24h_mean",
     "demand_rolling_48h_mean",
     "demand_rolling_72h_mean",
     "demand_rolling_168h_mean",
+
     "demand_std_24h",
     "demand_std_48h",
     "demand_std_72h",
     "demand_std_168h",
+
     "demand_min_24h",
     "demand_min_48h",
     "demand_min_72h",
     "demand_min_168h",
+
     "demand_max_24h",
     "demand_max_48h",
     "demand_max_72h",
     "demand_max_168h",
-    #####
 
     "NYNGSP",
     "NYPOP",
 ]
 
-WINDOW_SIZE = 24*1  # Use past 1 day (24 hours) to predict future demand
+WINDOW_SIZE = 24 * 1
 FORECAST_HORIZON = 1
-#TRAIN_RATIO = 0.8
-SPLIT_DATE = "2024-04-30"  # Split date for train/test split
-#VALIDATION_SPLIT = 0.2
-EPOCHS = 30
+
+TRAIN_END_DATE = "2024-04-30"
+VALIDATION_START_DATE = "2024-05-01"
+VALIDATION_END_DATE = "2025-04-30"
+TEST_START_DATE = "2025-05-01"
+TEST_END_DATE = "2026-04-30"
+
+EPOCHS = 10
 BATCH_SIZE = 64
-LSTM_UNITS = 64
 DROPOUT_RATE = 0.2
 EARLY_STOPPING_PATIENCE = 5
 
+SEED = 42
+
+random.seed(SEED)
+np.random.seed(SEED)
+tf.random.set_seed(SEED)
 
 
 def inverse_transform_target_sequences(scaler, sequences):
     reshaped = np.asarray(sequences).reshape(-1, 1)
+
     dummy = np.zeros((reshaped.shape[0], len(FEATURES)))
     dummy[:, 0] = reshaped[:, 0]
+
     restored = scaler.inverse_transform(dummy)[:, 0]
+
     return restored.reshape(np.asarray(sequences).shape)
 
 
 def create_sequences(scaled_data):
     min_required_rows = WINDOW_SIZE + FORECAST_HORIZON
+
     if len(scaled_data) < min_required_rows:
         raise ValueError(
-            "Not enough rows to create training sequences for the current "
+            "Not enough rows to create sequences for the current "
             f"WINDOW_SIZE={WINDOW_SIZE} and FORECAST_HORIZON={FORECAST_HORIZON}. "
             f"Need at least {min_required_rows} rows, got {len(scaled_data)}."
         )
@@ -115,16 +132,34 @@ def create_sequences(scaled_data):
 def build_lstm_model():
     model = Sequential(
         [
+            Input(shape=(WINDOW_SIZE, len(FEATURES))),
+
             LSTM(
-                units=LSTM_UNITS,
-                input_shape=(WINDOW_SIZE, len(FEATURES)),
+                units=128,
+                return_sequences=True,
             ),
             Dropout(DROPOUT_RATE),
+
+            LSTM(
+                units=64,
+                return_sequences=False,
+            ),
+            Dropout(DROPOUT_RATE),
+
             Dense(FORECAST_HORIZON),
         ]
     )
 
-    model.compile(optimizer="adam", loss="mse")
+    optimizer = tf.keras.optimizers.Adam(
+    learning_rate=0.001,
+    clipnorm=1.0,
+    )
+
+    model.compile(
+    optimizer=optimizer,
+    loss="mse",
+    )
+
     return model
 
 
@@ -146,7 +181,7 @@ def save_forecast_plot(y_test_flat, y_pred_flat, output_path, limit=500):
     plt.plot(y_test_flat[:limit], label="Actual")
     plt.plot(y_pred_flat[:limit], label="Forecast")
     plt.legend()
-    plt.title("Actual vs Forecast")
+    plt.title("Actual vs Forecast on Test Set")
     plt.xlabel("Forecasted point")
     plt.ylabel(TARGET_COL)
     plt.tight_layout()
@@ -154,26 +189,77 @@ def save_forecast_plot(y_test_flat, y_pred_flat, output_path, limit=500):
     plt.close()
 
 
-def log_mlflow_run_metadata(df, X_train, X_test):
+def calculate_mape(y_true, y_pred, epsilon=1e-6):
+    nonzero_mask = np.abs(y_true) > epsilon
+    excluded_zeros = np.size(y_true) - np.count_nonzero(nonzero_mask)
+
+    if np.any(nonzero_mask):
+        mape = (
+            np.mean(
+                np.abs(
+                    (y_true[nonzero_mask] - y_pred[nonzero_mask])
+                    / y_true[nonzero_mask]
+                )
+            )
+            * 100
+        )
+    else:
+        mape = np.nan
+
+    return mape, excluded_zeros
+
+
+def log_mlflow_run_metadata(df, train_df, val_df, test_df, X_train, X_val, X_test):
     params = {
         "data_path": str(DATA_PATH),
         "target_col": TARGET_COL,
+
         "window_size": WINDOW_SIZE,
         "forecast_horizon": FORECAST_HORIZON,
-        #"train_ratio": TRAIN_RATIO,
-        #"validation_split": VALIDATION_SPLIT,
+
+        "train_end_date_config": TRAIN_END_DATE,
+        "validation_start_date_config": VALIDATION_START_DATE,
+        "validation_end_date_config": VALIDATION_END_DATE,
+        "test_start_date_config": TEST_START_DATE,
+        "test_end_date_config": TEST_END_DATE,
+
+        "train_start_date_actual": str(train_df["date"].min()),
+        "train_end_date_actual": str(train_df["date"].max()),
+        "validation_start_date_actual": str(val_df["date"].min()),
+        "validation_end_date_actual": str(val_df["date"].max()),
+        "test_start_date_actual": str(test_df["date"].min()),
+        "test_end_date_actual": str(test_df["date"].max()),
+
         "epochs": EPOCHS,
         "batch_size": BATCH_SIZE,
-        "lstm_units": LSTM_UNITS,
         "dropout_rate": DROPOUT_RATE,
         "early_stopping_patience": EARLY_STOPPING_PATIENCE,
+
         "optimizer": "adam",
         "loss": "mse",
+
         "feature_count": len(FEATURES),
         "row_count_after_dropna": len(df),
+        "train_row_count": len(train_df),
+        "validation_row_count": len(val_df),
+        "test_row_count": len(test_df),
+
         "train_sequence_count": len(X_train),
+        "validation_sequence_count": len(X_val),
         "test_sequence_count": len(X_test),
+
+        "seed": SEED,
+        "lstm_architecture": "Input_LSTM128_LSTM64_Dense72",
+
+        "reduce_lr_on_plateau": True,
+        "reduce_lr_factor": 0.5,
+        "reduce_lr_patience": 3,
+
+        "scaler_fit_on": "train_only",
+        "validation_history_context_hours": WINDOW_SIZE,
+        "test_history_context_hours": WINDOW_SIZE,
     }
+
     mlflow.log_params(params)
     mlflow.log_text(json.dumps(FEATURES, indent=2), "features.json")
 
@@ -184,42 +270,83 @@ def train_lstm():
     print("Loading data...")
     df = pd.read_csv(DATA_PATH)
 
+    missing_raw_columns = [TARGET_COL, "date"]
+    missing_raw_columns = [col for col in missing_raw_columns if col not in df.columns]
+    if missing_raw_columns:
+        raise KeyError(f"Missing required columns in dataset: {missing_raw_columns}")
+
     # Convert target to numeric
     df[TARGET_COL] = pd.to_numeric(
-        df[TARGET_COL].astype(str).str.replace(",", "", regex=False)
+        df[TARGET_COL].astype(str).str.replace(",", "", regex=False),
+        errors="coerce",
     )
 
     # Convert date column
-    df["date"] = pd.to_datetime(df["date"])
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
     # Sort by time
     df = df.sort_values("date").reset_index(drop=True)
-
-    # Drop missing values
-    df = df.dropna()
 
     missing_features = [feature for feature in FEATURES if feature not in df.columns]
     if missing_features:
         raise KeyError(f"Missing features in dataset: {missing_features}")
 
+    # Keep only date + selected features
+    df = df[["date"] + FEATURES].copy()
+
+    # Drop missing values
+    df = df.dropna().reset_index(drop=True)
+
     print("Data shape:", df.shape)
     print("Date range:", df["date"].min(), "to", df["date"].max())
 
     # ==================================================
-    # Split by date
+    # Split by date: Train / Validation / Test
     # ==================================================
     print("Splitting data by date...")
 
+    train_end = pd.to_datetime(TRAIN_END_DATE)
+    val_start = pd.to_datetime(VALIDATION_START_DATE)
+    val_end = pd.to_datetime(VALIDATION_END_DATE)
+    test_start = pd.to_datetime(TEST_START_DATE)
+    test_end = pd.to_datetime(TEST_END_DATE)
 
+    train_df = df[df["date"] <= train_end].copy()
 
-    train_df = df[df["date"] < SPLIT_DATE].copy()
-    test_df = df[df["date"] >= SPLIT_DATE].copy()
+    val_df = df[
+        (df["date"] >= val_start)
+        & (df["date"] <= val_end)
+    ].copy()
 
-    print("Train rows:", len(train_df))
-    print("Train date range:", train_df["date"].min(), "to", train_df["date"].max())
+    test_df = df[
+        (df["date"] >= test_start)
+        & (df["date"] <= test_end)
+    ].copy()
 
-    print("Test rows :", len(test_df))
-    print("Test date range :", test_df["date"].min(), "to", test_df["date"].max())
+    if train_df.empty:
+        raise ValueError("Training set is empty. Check TRAIN_END_DATE.")
+
+    if val_df.empty:
+        raise ValueError("Validation set is empty. Check validation date range.")
+
+    if test_df.empty:
+        raise ValueError("Test set is empty. Check test date range.")
+
+    print("=" * 60)
+    print("TRAIN")
+    print("Date range:", train_df["date"].min(), "to", train_df["date"].max())
+    print("Rows:", len(train_df))
+    print()
+
+    print("VALIDATION")
+    print("Date range:", val_df["date"].min(), "to", val_df["date"].max())
+    print("Rows:", len(val_df))
+    print()
+
+    print("TEST")
+    print("Date range:", test_df["date"].min(), "to", test_df["date"].max())
+    print("Rows:", len(test_df))
+    print("=" * 60)
 
     # ==================================================
     # Scaling
@@ -228,13 +355,23 @@ def train_lstm():
 
     scaler = MinMaxScaler()
 
+    # Fit scaler only on training data to avoid data leakage
     train_scaled = scaler.fit_transform(train_df[FEATURES])
 
-    # Add last WINDOW_SIZE rows from train to test input
-    # so the first test sequence has enough historical context
+    # Add last WINDOW_SIZE rows from train to validation input
+    # so the first validation sequence has enough historical context.
+    val_input_df = pd.concat(
+        [train_df.tail(WINDOW_SIZE), val_df],
+        ignore_index=True,
+    )
+
+    val_scaled = scaler.transform(val_input_df[FEATURES])
+
+    # Add last WINDOW_SIZE rows from validation to test input
+    # so the first test sequence has enough historical context.
     test_input_df = pd.concat(
-        [train_df.tail(WINDOW_SIZE), test_df],
-        ignore_index=True
+        [val_df.tail(WINDOW_SIZE), test_df],
+        ignore_index=True,
     )
 
     test_scaled = scaler.transform(test_input_df[FEATURES])
@@ -245,24 +382,29 @@ def train_lstm():
     print("Creating training sequences...")
     X_train, y_train = create_sequences(train_scaled)
 
+    print("Creating validation sequences...")
+    X_val, y_val = create_sequences(val_scaled)
+
     print("Creating testing sequences...")
     X_test, y_test = create_sequences(test_scaled)
 
     print("Train X shape:", X_train.shape)
     print("Train y shape:", y_train.shape)
+    print("Validation X shape:", X_val.shape)
+    print("Validation y shape:", y_val.shape)
     print("Test X shape :", X_test.shape)
     print("Test y shape :", y_test.shape)
 
-    with mlflow.start_run(run_name="lstm_Toan_date_split"):
-        log_mlflow_run_metadata(df, X_train, X_test)
-
-        mlflow.log_param("split_date", split_date)
-        mlflow.log_param("train_start_date", str(train_df["date"].min()))
-        mlflow.log_param("train_end_date", str(train_df["date"].max()))
-        mlflow.log_param("test_start_date", str(test_df["date"].min()))
-        mlflow.log_param("test_end_date", str(test_df["date"].max()))
-        mlflow.log_param("scaler_fit_on", "train_only")
-        mlflow.log_param("test_history_context_hours", WINDOW_SIZE)
+    with mlflow.start_run(run_name="lstm_Toan_train_val_test_2layer"):
+        log_mlflow_run_metadata(
+            df=df,
+            train_df=train_df,
+            val_df=val_df,
+            test_df=test_df,
+            X_train=X_train,
+            X_val=X_val,
+            X_test=X_test,
+        )
 
         print("Building model...")
         model = build_lstm_model()
@@ -274,25 +416,33 @@ def train_lstm():
             restore_best_weights=True,
         )
 
+        reduce_lr = ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.5,
+            patience=3,
+            min_lr=1e-6,
+            verbose=1,
+        )
+
         print("Training...")
         history = model.fit(
             X_train,
             y_train,
-            #validation_split=VALIDATION_SPLIT,
+            validation_data=(X_val, y_val),
             shuffle=False,
             epochs=EPOCHS,
             batch_size=BATCH_SIZE,
-            callbacks=[early_stop],
+            callbacks=[early_stop, reduce_lr],
             verbose=1,
         )
 
-        for step, (loss, val_loss) in enumerate(
-            zip(history.history["loss"], history.history["val_loss"])
-        ):
-            mlflow.log_metric("train_loss", loss, step=step)
-            mlflow.log_metric("val_loss", val_loss, step=step)
+        for step, loss in enumerate(history.history["loss"]):
+            mlflow.log_metric("train_loss", float(loss), step=step)
 
-        print("Predicting...")
+        for step, val_loss in enumerate(history.history["val_loss"]):
+            mlflow.log_metric("val_loss", float(val_loss), step=step)
+
+        print("Predicting on test set...")
         y_pred = model.predict(X_test)
 
         y_pred_real = inverse_transform_target_sequences(scaler, y_pred)
@@ -303,42 +453,31 @@ def train_lstm():
 
         mae = mean_absolute_error(y_test_flat, y_pred_flat)
         rmse = np.sqrt(mean_squared_error(y_test_flat, y_pred_flat))
+        mape, excluded_zeros = calculate_mape(y_test_flat, y_pred_flat)
 
-        epsilon = 1e-6
-        nonzero_mask = np.abs(y_test_flat) > epsilon
-        excluded_zeros = np.size(y_test_flat) - np.count_nonzero(nonzero_mask)
-
-        if np.any(nonzero_mask):
-            mape = (
-                np.mean(
-                    np.abs(
-                        (y_test_flat[nonzero_mask] - y_pred_flat[nonzero_mask])
-                        / y_test_flat[nonzero_mask]
-                    )
-                )
-                * 100
-            )
-        else:
-            mape = np.nan
-
-        print("\n===== RESULTS =====")
+        print("\n===== TEST RESULTS =====")
         print(f"MAE  : {mae:.2f}")
         print(f"RMSE : {rmse:.2f}")
-        print(f"MAPE : {mape:.2f}%")
+
+        if np.isfinite(mape):
+            print(f"MAPE : {mape:.2f}%")
+        else:
+            print("MAPE : not available")
+
         print(f"MAPE excluded zero-demand points: {excluded_zeros}")
 
         mlflow.log_metrics(
             {
-                "mae": float(mae),
-                "rmse": float(rmse),
-                "excluded_zero_demand_points": int(excluded_zeros),
+                "test_mae": float(mae),
+                "test_rmse": float(rmse),
+                "test_excluded_zero_demand_points": int(excluded_zeros),
             }
         )
 
         if np.isfinite(mape):
-            mlflow.log_metric("mape", float(mape))
+            mlflow.log_metric("test_mape", float(mape))
         else:
-            mlflow.log_param("mape_status", "not_available_all_targets_are_zero")
+            mlflow.log_param("test_mape_status", "not_available_all_targets_are_zero")
 
         MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
         PLOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -347,7 +486,7 @@ def train_lstm():
         print(f"\nModel saved: {MODEL_PATH}")
 
         training_loss_plot_path = PLOT_DIR / "lstm_training_loss.png"
-        forecast_plot_path = PLOT_DIR / "lstm_actual_vs_forecast.png"
+        forecast_plot_path = PLOT_DIR / "lstm_test_actual_vs_forecast.png"
 
         save_training_loss_plot(history, training_loss_plot_path)
         save_forecast_plot(y_test_flat, y_pred_flat, forecast_plot_path)

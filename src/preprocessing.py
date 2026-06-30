@@ -205,17 +205,27 @@ def process_data():
     elec_demand_df["demand_lag_72h"] = elec_demand_df["Demand"].shift(72)
 
     elec_demand_df["demand_rolling_24h_mean"] = elec_demand_df["Demand"].shift(1).rolling(24).mean()
+    elec_demand_df["demand_rolling_48h_mean"] = elec_demand_df["Demand"].shift(1).rolling(48).mean()  
+    elec_demand_df["demand_rolling_72h_mean"] = elec_demand_df["Demand"].shift(1).rolling(72).mean()  
     elec_demand_df["demand_rolling_168h_mean"] = elec_demand_df["Demand"].shift(1).rolling(168).mean()  
-   
+
     # Std
     elec_demand_df["demand_std_24h"] = elec_demand_df["Demand"].rolling(24).std()
+    elec_demand_df["demand_std_48h"] = elec_demand_df["Demand"].rolling(48).std()
+    elec_demand_df["demand_std_72h"] = elec_demand_df["Demand"].rolling(72).std()
     elec_demand_df["demand_std_168h"] = elec_demand_df["Demand"].rolling(168).std()
 
     # Min
     elec_demand_df["demand_min_24h"] = elec_demand_df["Demand"].rolling(24).min()
+    elec_demand_df["demand_min_48h"] = elec_demand_df["Demand"].rolling(48).min()
+    elec_demand_df["demand_min_72h"] = elec_demand_df["Demand"].rolling(72).min()
+    elec_demand_df["demand_min_168h"] = elec_demand_df["Demand"].rolling(168).min()
 
     # Max
     elec_demand_df["demand_max_24h"] = elec_demand_df["Demand"].rolling(24).max()
+    elec_demand_df["demand_max_48h"] = elec_demand_df["Demand"].rolling(48).max()
+    elec_demand_df["demand_max_72h"] = elec_demand_df["Demand"].rolling(72).max()
+    elec_demand_df["demand_max_168h"] = elec_demand_df["Demand"].rolling(168).max()
 
 
     ########################
@@ -248,7 +258,16 @@ def process_data():
     # step 5 zero imputation for missing values in merged_df
     merged_df.fillna(0, inplace=True)
 
-      
+
+    # step 6: drop duplicates based on 'Local time'
+    merged_df.drop_duplicates(subset='Local time', inplace=True)  
+
+    # step 7: Cut the dataset to the desired date range 
+    # (2016-04-30 to 2026-04-30) to match the electricity demand data range
+    # to avoid any potential issues with demand_lag features =0 and 
+    # data is of 10 years.
+    merged_df = merged_df[(merged_df['date'] >= '2016-04-30') & (merged_df['date'] <= '2026-04-30')]    
+
     return merged_df
 
 
