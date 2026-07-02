@@ -1,20 +1,20 @@
 """Pull DVC-tracked datasets from DagsHub storage."""
 
-import os
+import io
 import subprocess
 import sys
+import contextlib
 
 import dagshub.auth
 
 
 def main() -> int:
-    token = dagshub.auth.get_token(fail_if_no_token=True)
-    username = os.getenv("DAGSHUB_USER_NAME", "msshakeel12")
+    with contextlib.redirect_stdout(io.StringIO()):
+        token = dagshub.auth.get_token(fail_if_no_token=True)
 
     commands = [
-        ["dvc", "remote", "modify", "origin", "--local", "auth", "basic"],
-        ["dvc", "remote", "modify", "origin", "--local", "user", username],
-        ["dvc", "remote", "modify", "origin", "--local", "password", token],
+        ["dvc", "remote", "modify", "origin", "--local", "access_key_id", token],
+        ["dvc", "remote", "modify", "origin", "--local", "secret_access_key", token],
         ["dvc", "remote", "default", "origin"],
         ["dvc", "pull", "-v"],
     ]
