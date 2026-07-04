@@ -37,16 +37,13 @@ EPOCHS = 20
 BATCH_SIZE = 64 # Batch size for training
 DROPOUT_RATE = 0.2  # Dropout rate for LSTM layers
 EARLY_STOPPING_PATIENCE = 5 # Number of epochs with no improvement after which training will be stopped
-EXTREME_LOSS_WEIGHT = 3.0  #  Weight for extreme values in the custom loss function
-HUBER_DELTA = 0.07  # Delta value for Huber loss; 
-# If huber_delta is too small, the loss will behave like MAE; 
-# lower sensitivity to outliers and lower gradient for small errors. 
-# if too large, it will behave like MSE; 
-# higher sensitivity to outliers and higher gradient for small errors.
+EXTREME_LOSS_WEIGHT = 4.0  # Weight for high/low demand values far from the scaled center 0.5
+UNDER_PREDICTION_WEIGHT = 3.0  # Extra penalty when the model predicts lower than actual demand
+LOSS_FUNCTION_NAME = "asymmetric_peak_mse"
   
 PERMUTATION_SAMPLE_SIZE = 500
 RUN_PERMUTATION_IMPORTANCE = False
-RUN_NAME = "lstm_Toan_using_huber_loss_with_extreme_weighting to hoplessly improve performance on extreme values - two peaks"
+RUN_NAME = "lstm_Toan_asymmetric_peak_mse_loss_for_peak_forecasting"
 TARGET_COL = "Demand"
 
 SEED = 42
@@ -169,30 +166,44 @@ def build_lstm_model():
 
     model.compile(
         optimizer=optimizer,
-        loss=weighted_extreme_huber_loss,
+        loss=asymmetric_peak_mse_loss,
     )
 
     return model
 
 #==================================================
-# Custom Loss Function
-# if abs_error < HUBER_DELTA, use squared error (quadratic)
-# if abs_error >= HUBER_DELTA, use linear error (linear)
-# if y_true is extreme (far from 0.5), apply higher weight to the loss
-# if y_true is near 0.5, apply lower weight to the loss
+# Custom Loss Functions
+# y_true and y_pred are scaled by MinMaxScaler, so target Demand is usually in [0, 1].
+# weighted_peak_mse_loss:
+#   - uses MSE instead of Huber, so large peak errors are penalized strongly.
+#   - increases loss weight when y_true is far from 0.5, meaning high peaks and low valleys.
+# asymmetric_peak_mse_loss:
+#   - adds one more penalty when prediction is lower than actual demand.
+#   - this is useful when forecast peaks are consistently lower than actual peaks.
 #=================================================
-def weighted_extreme_huber_loss(y_true, y_pred):
+def weighted_peak_mse_loss(y_true, y_pred):
     error = y_true - y_pred
-    abs_error = tf.abs(error)
-
-    quadratic = tf.minimum(abs_error, HUBER_DELTA)
-    linear = abs_error - quadratic
-    huber = 0.5 * tf.square(quadratic) + HUBER_DELTA * linear
+    mse = tf.square(error)
 
     extreme_distance = tf.abs(y_true - 0.5) * 2.0
-    weights = 1.0 + EXTREME_LOSS_WEIGHT * extreme_distance
+    extreme_weights = 1.0 + EXTREME_LOSS_WEIGHT * extreme_distance
 
-    return tf.reduce_mean(weights * huber)
+    return tf.reduce_mean(extreme_weights * mse)
+
+
+def asymmetric_peak_mse_loss(y_true, y_pred):
+    error = y_true - y_pred
+    mse = tf.square(error)
+
+    extreme_distance = tf.abs(y_true - 0.5) * 2.0
+    extreme_weights = 1.0 + EXTREME_LOSS_WEIGHT * extreme_distance
+
+    under_prediction = tf.cast(error > 0, tf.float32)
+    under_prediction_weights = 1.0 + UNDER_PREDICTION_WEIGHT * under_prediction
+
+    return tf.reduce_mean(
+        extreme_weights * under_prediction_weights * mse
+    )
 
 
 def save_training_loss_plot(history, output_path):
@@ -202,7 +213,7 @@ def save_training_loss_plot(history, output_path):
     plt.legend()
     plt.title("LSTM Training Loss")
     plt.xlabel("Epoch")
-    plt.ylabel("MSE Loss")
+    plt.ylabel("Training Loss")
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
@@ -281,6 +292,26 @@ def calculate_extreme_metrics(y_true, y_pred):
         "test_pred_range": pred_range,
         "test_range_coverage": range_coverage,
     }
+
+
+def print_extreme_metrics(title, metrics):
+    print(f"\n===== {title} =====")
+    print(
+        "Min  actual/pred/gap: "
+        f"{metrics['test_actual_min']:.2f} / "
+        f"{metrics['test_pred_min']:.2f} / "
+        f"{metrics['test_min_gap']:.2f}"
+    )
+    print(
+        "Max  actual/pred/gap: "
+        f"{metrics['test_actual_max']:.2f} / "
+        f"{metrics['test_pred_max']:.2f} / "
+        f"{metrics['test_max_gap']:.2f}"
+    )
+    print(
+        "Range coverage: "
+        f"{metrics['test_range_coverage']:.3f}"
+    )
 
 
 def evaluate_mae(model, X, y_true, scaler, batch_size=64):
@@ -414,9 +445,9 @@ def log_mlflow_run_metadata(df, train_df, val_df, test_df, X_train, X_val, X_tes
         "early_stopping_patience": EARLY_STOPPING_PATIENCE,
 
         "optimizer": "adam",
-        "loss": "weighted_extreme_huber",
+        "loss": LOSS_FUNCTION_NAME,
         "extreme_loss_weight": EXTREME_LOSS_WEIGHT,
-        "huber_delta": HUBER_DELTA,
+        "under_prediction_weight": UNDER_PREDICTION_WEIGHT,
 
         "feature_count": len(FEATURES),
         "row_count_after_dropna": len(df),
@@ -635,23 +666,7 @@ def train_lstm():
             print("MAPE : not available")
 
         print(f"MAPE excluded zero-demand points: {excluded_zeros}")
-        print("\n===== MIN/MAX CHECK =====")
-        print(
-            "Min  actual/pred/gap: "
-            f"{extreme_metrics['test_actual_min']:.2f} / "
-            f"{extreme_metrics['test_pred_min']:.2f} / "
-            f"{extreme_metrics['test_min_gap']:.2f}"
-        )
-        print(
-            "Max  actual/pred/gap: "
-            f"{extreme_metrics['test_actual_max']:.2f} / "
-            f"{extreme_metrics['test_pred_max']:.2f} / "
-            f"{extreme_metrics['test_max_gap']:.2f}"
-        )
-        print(
-            "Range coverage: "
-            f"{extreme_metrics['test_range_coverage']:.3f}"
-        )
+        print_extreme_metrics("MIN/MAX CHECK", extreme_metrics)
 
         mlflow.log_metrics(
             {
