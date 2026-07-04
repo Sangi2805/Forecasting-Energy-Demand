@@ -9,7 +9,7 @@ import re
 
 
 def read_elec_demand_data():
-    df = dc.read_csv_file(cfg.RAW_DATA_DIR / "electricity_demand_data.csv")
+    df = dc.read_csv_file(cfg.RAW_DATA_DIR / "electricity_demand_data.csv",cols=cfg.ELEC_DEMAND_FEATURES)   # all columns are needed for electricity demand data
     df = remove_units_from_column_names(df)
     return df[cfg.ELEC_DEMAND_FEATURES]   # all columns are needed for electricity demand data
     
@@ -30,9 +30,9 @@ def read_holiday_data(start_date, end_date):
     return dc.read_holiday_data(start_date, end_date)
 # test: ok
 def get_date_range_from_elec_demand(elec_demand_df):
-    local_times = pd.to_datetime(elec_demand_df["Local time"], format="%m/%d/%Y %H:%M")
-    start_date = local_times.min().strftime("%Y-%m-%d")
-    end_date = local_times.max().strftime("%Y-%m-%d")
+    utc_times = pd.to_datetime(elec_demand_df["UTC time"], format="%m/%d/%Y %H:%M")
+    start_date = utc_times.min().strftime("%Y-%m-%d")
+    end_date = utc_times.max().strftime("%Y-%m-%d")
     return start_date, end_date
 
 def add_date_features(df, datetime_col):
@@ -41,15 +41,32 @@ def add_date_features(df, datetime_col):
     df["month"] = df[datetime_col].dt.month
     return df
 
-def add_date_time_standardized_columns(elec_demand_df, weather_df, gdp_df, population_df, holiday_df):
-    elec_demand_df["Local time"] = pd.to_datetime(
-        elec_demand_df["Local time"],
-        format="%m/%d/%Y %H:%M"
-    )
-    weather_df["time"] = pd.to_datetime(
+def add_weather_utc_time_column(weather_df):
+    weather_df = weather_df.copy()
+    local_time = pd.to_datetime(
         weather_df["time"],
         format="%Y-%m-%dT%H:%M"
     )
+
+    localized_time = local_time.dt.tz_localize(
+        "America/New_York",
+        ambiguous=False,
+        nonexistent="shift_forward"
+    )
+
+    weather_df["UTC time"] = (
+        localized_time
+        .dt.tz_convert("UTC")
+        .dt.tz_localize(None)
+    )
+    return weather_df
+
+def add_date_time_standardized_columns(elec_demand_df, weather_df, gdp_df, population_df, holiday_df):
+    elec_demand_df["UTC time"] = pd.to_datetime(
+        elec_demand_df["UTC time"],
+        format="%m/%d/%Y %H:%M"
+    )
+    weather_df = add_weather_utc_time_column(weather_df)
     gdp_df["observation_date"] = pd.to_datetime(
         gdp_df["observation_date"],
         format="%Y-%m-%d"
@@ -60,12 +77,13 @@ def add_date_time_standardized_columns(elec_demand_df, weather_df, gdp_df, popul
     )
     holiday_df["date"] = pd.to_datetime(holiday_df["date"])
 
-    #add_date_features(elec_demand_df, "Local time")
-    elec_demand_df["date"] = elec_demand_df["Local time"].dt.normalize()
+    #add_date_features(elec_demand_df, "UTC time")
+    elec_demand_df["date"] = elec_demand_df["UTC time"].dt.normalize()
     elec_demand_df["day_name"] = elec_demand_df["date"].dt.day_name()
-    elec_demand_df["month"] = elec_demand_df["Local time"].dt.month
-    elec_demand_df["month_name"] = elec_demand_df["Local time"].dt.month_name()
-    elec_demand_df["year"] = elec_demand_df["Local time"].dt.year
+    elec_demand_df["Hour"] = elec_demand_df["UTC time"].dt.hour
+    elec_demand_df["month"] = elec_demand_df["UTC time"].dt.month
+    elec_demand_df["month_name"] = elec_demand_df["UTC time"].dt.month_name()
+    elec_demand_df["year"] = elec_demand_df["UTC time"].dt.year
 
 
     #add_date_features(weather_df, "time")
@@ -99,7 +117,10 @@ def add_hour_weekday_month_encoded_features(df_input):
     hour_series = pd.to_numeric(df_output["Hour"], errors="coerce")
     month_series = pd.to_numeric(df_output["month"], errors="coerce")
 
-    if "Local time" in df_output.columns:
+    if "UTC time" in df_output.columns:
+        utc_time_dt = pd.to_datetime(df_output["UTC time"], errors="coerce")
+        weekday_series = utc_time_dt.dt.dayofweek
+    elif "Local time" in df_output.columns:
         local_time_dt = pd.to_datetime(df_output["Local time"], errors="coerce")
         weekday_series = local_time_dt.dt.dayofweek
     elif "day_of_week" in df_output.columns:
@@ -203,29 +224,32 @@ def process_data():
     elec_demand_df["demand_lag_24h"] = elec_demand_df["Demand"].shift(24)
     elec_demand_df["demand_lag_48h"] = elec_demand_df["Demand"].shift(48)
     elec_demand_df["demand_lag_72h"] = elec_demand_df["Demand"].shift(72)
+    elec_demand_df["demand_lag_168h"] = elec_demand_df["Demand"].shift(168)
 
     elec_demand_df["demand_rolling_24h_mean"] = elec_demand_df["Demand"].shift(1).rolling(24).mean()
     elec_demand_df["demand_rolling_48h_mean"] = elec_demand_df["Demand"].shift(1).rolling(48).mean()  
     elec_demand_df["demand_rolling_72h_mean"] = elec_demand_df["Demand"].shift(1).rolling(72).mean()  
     elec_demand_df["demand_rolling_168h_mean"] = elec_demand_df["Demand"].shift(1).rolling(168).mean()  
 
+    historical_demand = elec_demand_df["Demand"].shift(1)
+
     # Std
-    elec_demand_df["demand_std_24h"] = elec_demand_df["Demand"].rolling(24).std()
-    elec_demand_df["demand_std_48h"] = elec_demand_df["Demand"].rolling(48).std()
-    elec_demand_df["demand_std_72h"] = elec_demand_df["Demand"].rolling(72).std()
-    elec_demand_df["demand_std_168h"] = elec_demand_df["Demand"].rolling(168).std()
+    elec_demand_df["demand_std_24h"] = historical_demand.rolling(24).std()
+    elec_demand_df["demand_std_48h"] = historical_demand.rolling(48).std()
+    elec_demand_df["demand_std_72h"] = historical_demand.rolling(72).std()
+    elec_demand_df["demand_std_168h"] = historical_demand.rolling(168).std()
 
     # Min
-    elec_demand_df["demand_min_24h"] = elec_demand_df["Demand"].rolling(24).min()
-    elec_demand_df["demand_min_48h"] = elec_demand_df["Demand"].rolling(48).min()
-    elec_demand_df["demand_min_72h"] = elec_demand_df["Demand"].rolling(72).min()
-    elec_demand_df["demand_min_168h"] = elec_demand_df["Demand"].rolling(168).min()
+    elec_demand_df["demand_min_24h"] = historical_demand.rolling(24).min()
+    elec_demand_df["demand_min_48h"] = historical_demand.rolling(48).min()
+    elec_demand_df["demand_min_72h"] = historical_demand.rolling(72).min()
+    elec_demand_df["demand_min_168h"] = historical_demand.rolling(168).min()
 
     # Max
-    elec_demand_df["demand_max_24h"] = elec_demand_df["Demand"].rolling(24).max()
-    elec_demand_df["demand_max_48h"] = elec_demand_df["Demand"].rolling(48).max()
-    elec_demand_df["demand_max_72h"] = elec_demand_df["Demand"].rolling(72).max()
-    elec_demand_df["demand_max_168h"] = elec_demand_df["Demand"].rolling(168).max()
+    elec_demand_df["demand_max_24h"] = historical_demand.rolling(24).max()
+    elec_demand_df["demand_max_48h"] = historical_demand.rolling(48).max()
+    elec_demand_df["demand_max_72h"] = historical_demand.rolling(72).max()
+    elec_demand_df["demand_max_168h"] = historical_demand.rolling(168).max()
 
 
     ########################
@@ -237,7 +261,7 @@ def process_data():
     
     merged_df["holiday_encoded"] = encode_holiday_to_numeric(merged_df["holiday"])
 
-    merged_df = pd.merge(merged_df, weather_df, left_on='Local time', right_on='time', how='left')
+    merged_df = pd.merge(merged_df, weather_df, on='UTC time', how='left')
     merged_df = pd.merge(merged_df, gdp_df, left_on='year', right_on='year', how='left')
     merged_df = pd.merge(merged_df, population_df, left_on='year', right_on='year', how='left')
        
@@ -259,14 +283,18 @@ def process_data():
     merged_df.fillna(0, inplace=True)
 
 
-    # step 6: drop duplicates based on 'Local time'
-    merged_df.drop_duplicates(subset='Local time', inplace=True)  
+    # step 6: drop duplicates based on 'UTC time'
+    merged_df.drop_duplicates(subset='UTC time', inplace=True)  
 
     # step 7: Cut the dataset to the desired date range 
     # (2016-04-30 to 2026-04-30) to match the electricity demand data range
     # to avoid any potential issues with demand_lag features =0 and 
     # data is of 10 years.
     merged_df = merged_df[(merged_df['date'] >= '2016-04-30') & (merged_df['date'] <= '2026-04-30')]    
+
+    # rename column "UTC time" to "datetime" for consistency
+    merged_df.rename(columns={"UTC time": "datetime"}, inplace=True)  
+
 
     return merged_df
 
@@ -282,7 +310,7 @@ def test():
     #test_df = pd.concat([dataset_df.head(5), dataset_df.tail(5)], ignore_index=True)
     #test_df.to_csv(cfg.REPORT_DIR / "test_data.csv", index=False)
     
-    print(dataset_df.isna().sum())
+    #print(dataset_df.isna().sum())
     dataset_df.to_csv(cfg.REPORT_DIR / "all_features_dataset.csv", index=False)
 
 if __name__ == "__main__":

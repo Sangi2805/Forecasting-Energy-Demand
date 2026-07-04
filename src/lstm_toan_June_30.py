@@ -24,7 +24,35 @@ DATA_PATH = cfg.REPORT_DIR / "all_features_dataset.csv"
 MODEL_PATH = cfg.MODEL_DIR / "lstm_model.keras"
 PLOT_DIR = cfg.REPORT_DIR / "plots"
 
+WINDOW_SIZE = 24 * 7
+FORECAST_HORIZON = 72
+
+TRAIN_END_DATE = "2024-04-30"
+VALIDATION_START_DATE = "2024-05-01"
+VALIDATION_END_DATE = "2025-04-30"
+TEST_START_DATE = "2025-05-01"
+TEST_END_DATE = "2026-04-30"
+
+EPOCHS = 20
+BATCH_SIZE = 64 # Batch size for training
+DROPOUT_RATE = 0.2  # Dropout rate for LSTM layers
+EARLY_STOPPING_PATIENCE = 5 # Number of epochs with no improvement after which training will be stopped
+EXTREME_LOSS_WEIGHT = 3.0  #  Weight for extreme values in the custom loss function
+HUBER_DELTA = 0.07  # Delta value for Huber loss; 
+# If huber_delta is too small, the loss will behave like MAE; 
+# lower sensitivity to outliers and lower gradient for small errors. 
+# if too large, it will behave like MSE; 
+# higher sensitivity to outliers and higher gradient for small errors.
+  
+PERMUTATION_SAMPLE_SIZE = 500
+RUN_PERMUTATION_IMPORTANCE = False
+RUN_NAME = "lstm_Toan_using_huber_loss_with_extreme_weighting to hoplessly improve performance on extreme values - two peaks"
 TARGET_COL = "Demand"
+
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+tf.random.set_seed(SEED)
 
 FEATURES = [
     "Demand",
@@ -51,6 +79,7 @@ FEATURES = [
     "demand_lag_24h",
     "demand_lag_48h",
     "demand_lag_72h",
+    "demand_lag_168h",
 
     "demand_rolling_24h_mean",
     "demand_rolling_48h_mean",
@@ -76,28 +105,9 @@ FEATURES = [
     "NYPOP",
 ]
 
-WINDOW_SIZE = 24 * 7
-FORECAST_HORIZON = 72
 
-TRAIN_END_DATE = "2024-04-30"
-VALIDATION_START_DATE = "2024-05-01"
-VALIDATION_END_DATE = "2025-04-30"
-TEST_START_DATE = "2025-05-01"
-TEST_END_DATE = "2026-04-30"
 
-EPOCHS = 50
-BATCH_SIZE = 64
-DROPOUT_RATE = 0.2
-EARLY_STOPPING_PATIENCE = 5
-  
-PERMUTATION_SAMPLE_SIZE = 500
-RUN_PERMUTATION_IMPORTANCE = False
 
-SEED = 42
-
-random.seed(SEED)
-np.random.seed(SEED)
-tf.random.set_seed(SEED)
 
 
 def inverse_transform_target_sequences(scaler, sequences):
@@ -159,10 +169,30 @@ def build_lstm_model():
 
     model.compile(
         optimizer=optimizer,
-        loss="mse",
+        loss=weighted_extreme_huber_loss,
     )
 
     return model
+
+#==================================================
+# Custom Loss Function
+# if abs_error < HUBER_DELTA, use squared error (quadratic)
+# if abs_error >= HUBER_DELTA, use linear error (linear)
+# if y_true is extreme (far from 0.5), apply higher weight to the loss
+# if y_true is near 0.5, apply lower weight to the loss
+#=================================================
+def weighted_extreme_huber_loss(y_true, y_pred):
+    error = y_true - y_pred
+    abs_error = tf.abs(error)
+
+    quadratic = tf.minimum(abs_error, HUBER_DELTA)
+    linear = abs_error - quadratic
+    huber = 0.5 * tf.square(quadratic) + HUBER_DELTA * linear
+
+    extreme_distance = tf.abs(y_true - 0.5) * 2.0
+    weights = 1.0 + EXTREME_LOSS_WEIGHT * extreme_distance
+
+    return tf.reduce_mean(weights * huber)
 
 
 def save_training_loss_plot(history, output_path):
@@ -225,6 +255,32 @@ def calculate_mape(y_true, y_pred, epsilon=1e-6):
         mape = np.nan
 
     return mape, excluded_zeros
+
+
+def calculate_extreme_metrics(y_true, y_pred):
+    true_min = float(np.min(y_true))
+    pred_min = float(np.min(y_pred))
+    true_max = float(np.max(y_true))
+    pred_max = float(np.max(y_pred))
+    true_range = true_max - true_min
+    pred_range = pred_max - pred_min
+
+    if true_range > 0:
+        range_coverage = pred_range / true_range
+    else:
+        range_coverage = np.nan
+
+    return {
+        "test_actual_min": true_min,
+        "test_pred_min": pred_min,
+        "test_min_gap": pred_min - true_min,
+        "test_actual_max": true_max,
+        "test_pred_max": pred_max,
+        "test_max_gap": pred_max - true_max,
+        "test_actual_range": true_range,
+        "test_pred_range": pred_range,
+        "test_range_coverage": range_coverage,
+    }
 
 
 def evaluate_mae(model, X, y_true, scaler, batch_size=64):
@@ -358,7 +414,9 @@ def log_mlflow_run_metadata(df, train_df, val_df, test_df, X_train, X_val, X_tes
         "early_stopping_patience": EARLY_STOPPING_PATIENCE,
 
         "optimizer": "adam",
-        "loss": "mse",
+        "loss": "weighted_extreme_huber",
+        "extreme_loss_weight": EXTREME_LOSS_WEIGHT,
+        "huber_delta": HUBER_DELTA,
 
         "feature_count": len(FEATURES),
         "row_count_after_dropna": len(df),
@@ -502,7 +560,7 @@ def train_lstm():
     print("Test X shape :", X_test.shape)
     print("Test y shape :", y_test.shape)
 
-    with mlflow.start_run(run_name="lstm_Toan_permutation_importance_analysis") as run:
+    with mlflow.start_run(run_name=RUN_NAME) as run:
         log_mlflow_run_metadata(
             df=df,
             train_df=train_df,
@@ -565,6 +623,7 @@ def train_lstm():
         mae = mean_absolute_error(y_test_flat, y_pred_flat)
         rmse = np.sqrt(mean_squared_error(y_test_flat, y_pred_flat))
         mape, excluded_zeros = calculate_mape(y_test_flat, y_pred_flat)
+        extreme_metrics = calculate_extreme_metrics(y_test_flat, y_pred_flat)
 
         print("\n===== TEST RESULTS =====")
         print(f"MAE  : {mae:.2f}")
@@ -576,12 +635,37 @@ def train_lstm():
             print("MAPE : not available")
 
         print(f"MAPE excluded zero-demand points: {excluded_zeros}")
+        print("\n===== MIN/MAX CHECK =====")
+        print(
+            "Min  actual/pred/gap: "
+            f"{extreme_metrics['test_actual_min']:.2f} / "
+            f"{extreme_metrics['test_pred_min']:.2f} / "
+            f"{extreme_metrics['test_min_gap']:.2f}"
+        )
+        print(
+            "Max  actual/pred/gap: "
+            f"{extreme_metrics['test_actual_max']:.2f} / "
+            f"{extreme_metrics['test_pred_max']:.2f} / "
+            f"{extreme_metrics['test_max_gap']:.2f}"
+        )
+        print(
+            "Range coverage: "
+            f"{extreme_metrics['test_range_coverage']:.3f}"
+        )
 
         mlflow.log_metrics(
             {
                 "test_mae": float(mae),
                 "test_rmse": float(rmse),
                 "test_excluded_zero_demand_points": int(excluded_zeros),
+            }
+        )
+
+        mlflow.log_metrics(
+            {
+                key: float(value)
+                for key, value in extreme_metrics.items()
+                if np.isfinite(value)
             }
         )
 

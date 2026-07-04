@@ -17,7 +17,7 @@ def get_season(month):
         return 'Winter'
 ###############################################################################
 # Generate resampled demand features.
-# df: DataFrame with columns 'Local time' and 'Demand'
+# df: DataFrame with columns 'datetime' and 'Demand'
 # resample_freq:  'D', 'W', 'ME' and 'YE'
 # aggregation_func: 'sum', 'mean', 'median', 'min' and 'max', 'std'
 # rolling_window: int, number of periods for rolling mean
@@ -36,12 +36,12 @@ def generate_resampled_demand_features(
     )
     # Filter by date range if specified
     if start_date:
-        df = df[df['Local time'] >= start_date]
+        df = df[df['datetime'] >= start_date]
     if end_date:
-        df = df[df['Local time'] <= end_date]
+        df = df[df['datetime'] <= end_date]
     # Resample to resample_freq total demand
     Sample_freq_df = (
-         df.set_index('Local time')
+         df.set_index('datetime')
          [['Demand']]
          .resample(resample_freq)
          .agg(aggregation_func)
@@ -53,7 +53,7 @@ def generate_resampled_demand_features(
 
 ###############################################################################
 # Plot electricity demand over time with rolling mean.
-# df: DataFrame with columns 'Local time' and 'Demand'
+# df: DataFrame with columns 'datetime' and 'Demand'
 # resample_freq:  'D', 'W', 'ME' and 'YE'
 # aggregation_func: 'sum', 'mean', 'median', 'min' and 'max', 'std'
 # rolling_window: int, number of periods for rolling mean
@@ -76,8 +76,8 @@ def plot_and_save(
         ):
     
     plt.figure(figsize=(13,5))
-    plt.plot(Sample_freq_df['Local time'], Sample_freq_df['Demand'], label=f'{title}', color='blue')
-    plt.plot(Sample_freq_df['Local time'], Sample_freq_df[f'Rolling_{rolling_window}d'], label=f'Rolling Mean ({rolling_window} periods ({resample_freq}))', color='orange')
+    plt.plot(Sample_freq_df['datetime'], Sample_freq_df['Demand'], label=f'{title}', color='blue')
+    plt.plot(Sample_freq_df['datetime'], Sample_freq_df[f'Rolling_{rolling_window}d'], label=f'Rolling Mean ({rolling_window} periods ({resample_freq}))', color='orange')
 
     plt.title(title)
     plt.xlabel(xlabel)
@@ -99,7 +99,7 @@ def plot_and_save(
 
 ######################################################################
 # Plot daily mean electricity demand over time with rolling mean.
-# df: DataFrame with columns 'Local time' and 'Demand'
+# df: DataFrame with columns 'datetime' and 'Demand'
 # resample_freq:  'D', 'W', 'ME' and 'YE'
 # aggregation_func: 'sum', 'mean', 'median', 'min' and 'max', 'std'
 # start_date: 'YYYY-MM-DD'
@@ -140,7 +140,7 @@ def plot_daily_mean_demand(
 
 ######################################################################
 # Plot monthly mean electricity demand over time with rolling mean.
-# df: DataFrame with columns 'Local time' and 'Demand'
+# df: DataFrame with columns 'datetime' and 'Demand'
 # resample_freq:  'D', 'W', 'ME' and 'YE'
 # aggregation_func: 'sum', 'mean', 'median', 'min' and 'max', 'std'
 # start_date: 'YYYY-MM-DD'
@@ -183,7 +183,7 @@ def plot_monthly_mean_demand(
 
 ######################################################################
 # Plot yearly mean electricity demand over time with rolling mean.
-# df: DataFrame with columns 'Local time' and 'Demand'
+# df: DataFrame with columns 'datetime' and 'Demand'
 # resample_freq:  'D', 'W', 'ME' and 'YE'
 # aggregation_func: 'sum', 'mean', 'median', 'min' and 'max', 'std'
 # start_date: 'YYYY-MM-DD'
@@ -225,7 +225,7 @@ def plot_yearly_mean_demand(
 
 ######################################################################
 # Plot monthly boxplot of electricity demand.
-# df: DataFrame with columns 'Local time' and 'Demand'
+# df: DataFrame with columns 'datetime' and 'Demand'
 #start_date : str, optional e.g. '2015-07-01'.
 #end_date : str, optional e.g. '2026-05-31'.
 #fig_path : str or Path, optional
@@ -241,7 +241,7 @@ def plot_monthly_demand_boxplot(
     df = df.copy()
 
     # Convert datetime
-    df['Local time'] = pd.to_datetime(df['Local time'])
+    df['datetime'] = pd.to_datetime(df['datetime'])
 
     # Convert Demand to numeric
     df['Demand'] = pd.to_numeric(
@@ -250,13 +250,13 @@ def plot_monthly_demand_boxplot(
 
     # Filter date range
     if start_date:
-        df = df[df['Local time'] >= pd.to_datetime(start_date)]
+        df = df[df['datetime'] >= pd.to_datetime(start_date)]
 
     if end_date:
-        df = df[df['Local time'] <= pd.to_datetime(end_date)]
+        df = df[df['datetime'] <= pd.to_datetime(end_date)]
 
     # Month names
-    df['month'] = df['Local time'].dt.month_name()
+    df['month'] = df['datetime'].dt.month_name()
 
     # Month order
     month_order = [
@@ -277,7 +277,7 @@ def plot_monthly_demand_boxplot(
     # Example 
     '''
     ax.plot(
-        df['Local time'],
+        df['datetime'],
         df['Demand']
     )
     '''
@@ -310,7 +310,7 @@ def plot_monthly_demand_boxplot(
 
 ######################################################################
 # Plot monthly boxplot of electricity demand.
-# df: DataFrame with columns 'Local time' and 'Demand'
+# df: DataFrame with columns 'datetime' and 'Demand'
 #start_date : str, optional e.g. '2015-07-01'.
 #end_date : str, optional e.g. '2026-05-31'.
 #fig_path : str or Path, optional
@@ -326,7 +326,7 @@ def plot_daily_demand_boxplot(
     df = df.copy()
 
     # Convert datetime
-    df['Local time'] = pd.to_datetime(df['Local time'])
+    df['datetime'] = pd.to_datetime(df['datetime'])
 
     # Convert Demand to numeric
     df['Demand'] = pd.to_numeric(
@@ -335,13 +335,13 @@ def plot_daily_demand_boxplot(
 
     # Filter date range
     if start_date:
-        df = df[df['Local time'] >= pd.to_datetime(start_date)]
+        df = df[df['datetime'] >= pd.to_datetime(start_date)]
 
     if end_date:
-        df = df[df['Local time'] <= pd.to_datetime(end_date)]
+        df = df[df['datetime'] <= pd.to_datetime(end_date)]
 
     # Weekday names
-    df['weekday'] = df['Local time'].dt.day_name()
+    df['weekday'] = df['datetime'].dt.day_name()
 
     # Ensure correct weekday order
     weekday_order = [
@@ -391,7 +391,7 @@ def plot_daily_demand_boxplot(
 
 ######################################################################
 # Plot daily boxplot of electricity demand.
-# df: DataFrame with columns 'Local time' and 'Demand'
+# df: DataFrame with columns 'datetime' and 'Demand'
 #start_date : str, optional e.g. '2015-07-01'.
 #end_date : str, optional e.g. '2026-05-31'.
 #fig_path : str or Path, optional
@@ -407,7 +407,7 @@ def plot_hourly_demand_boxplot(
     df = df.copy()
 
     # Convert datetime
-    df['Local time'] = pd.to_datetime(df['Local time'])
+    df['datetime'] = pd.to_datetime(df['datetime'])
 
     # Convert Demand to numeric
     df['Demand'] = pd.to_numeric(
@@ -416,13 +416,13 @@ def plot_hourly_demand_boxplot(
 
     # Filter date range
     if start_date:
-        df = df[df['Local time'] >= pd.to_datetime(start_date)]
+        df = df[df['datetime'] >= pd.to_datetime(start_date)]
 
     if end_date:
-        df = df[df['Local time'] <= pd.to_datetime(end_date)]
+        df = df[df['datetime'] <= pd.to_datetime(end_date)]
 
     # Hour of day must be a column for pandas DataFrame.boxplot(group by).
-    df['hour'] = df['Local time'].dt.hour
+    df['hour'] = df['datetime'].dt.hour
 
     # Create figure and axis
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -458,7 +458,7 @@ def plot_mean_demand_by_hour_season(df,
     df = df.copy()
 
     # Convert datetime
-    df['Local time'] = pd.to_datetime(df['Local time'])
+    df['datetime'] = pd.to_datetime(df['datetime'])
 
     # Convert Demand to numeric
     df['Demand'] = pd.to_numeric(
@@ -466,8 +466,8 @@ def plot_mean_demand_by_hour_season(df,
     )
 
     # Extract hour and month
-    df['hour'] = df['Local time'].dt.hour
-    df['month'] = df['Local time'].dt.month
+    df['hour'] = df['datetime'].dt.hour
+    df['month'] = df['datetime'].dt.month
 
     df['season'] = df['month'].apply(get_season)
 
@@ -524,7 +524,7 @@ fig_path=cfg.REPORT_DIR / "plot_mean_demand_by_weekday_season.png"
     df = df.copy()
 
     # Convert datetime
-    df['Local time'] = pd.to_datetime(df['Local time'])
+    df['datetime'] = pd.to_datetime(df['datetime'])
 
     # Convert Demand to numeric
     df['Demand'] = pd.to_numeric(
@@ -532,7 +532,7 @@ fig_path=cfg.REPORT_DIR / "plot_mean_demand_by_weekday_season.png"
     )
 
     # Weekday
-    df['weekday'] = df['Local time'].dt.day_name()
+    df['weekday'] = df['datetime'].dt.day_name()
 
     weekday_order = [
         'Monday',
@@ -545,7 +545,7 @@ fig_path=cfg.REPORT_DIR / "plot_mean_demand_by_weekday_season.png"
     ]
 
     # Month
-    df['month'] = df['Local time'].dt.month
+    df['month'] = df['datetime'].dt.month
 
     df['season'] = df['month'].apply(get_season)
 
@@ -606,7 +606,7 @@ def plot_mean_demand_by_holiday(df,
     df = df.copy()
 
     # Convert datetime
-    df['Local time'] = pd.to_datetime(df['Local time'])
+    df['datetime'] = pd.to_datetime(df['datetime'])
 
     # Convert Demand to numeric
     df['Demand'] = pd.to_numeric(
@@ -614,8 +614,8 @@ def plot_mean_demand_by_holiday(df,
     )
 
     # Extract month
-    df['month'] = df['Local time'].dt.month
-    df['month_name'] = df['Local time'].dt.month_name()
+    df['month'] = df['datetime'].dt.month
+    df['month_name'] = df['datetime'].dt.month_name()
 
     # Identify holiday rows
     if df['holiday'].dtype == bool:
@@ -714,7 +714,7 @@ def plot_mean_demand_by_month(df,
     df = df.copy()
 
     # Convert datetime
-    df['Local time'] = pd.to_datetime(df['Local time'])
+    df['datetime'] = pd.to_datetime(df['datetime'])
 
     # Convert Demand to numeric
     df['Demand'] = pd.to_numeric(
@@ -722,7 +722,7 @@ def plot_mean_demand_by_month(df,
     )
 
     # Extract month
-    df['month'] = df['Local time'].dt.month
+    df['month'] = df['datetime'].dt.month
 
     # Mean demand by month
     monthly_mean = (
@@ -783,7 +783,7 @@ def plot_scatter_temperature_vs_demand(
     temperature_col = "temperature_2m"
 
     # Convert datetime
-    df['Local time'] = pd.to_datetime(df['Local time'])
+    df['datetime'] = pd.to_datetime(df['datetime'])
 
     # Convert Demand to numeric
     df['Demand'] = pd.to_numeric(
@@ -801,10 +801,10 @@ def plot_scatter_temperature_vs_demand(
 
     # Filter date range
     if start_date:
-        df = df[df['Local time'] >= pd.to_datetime(start_date)]
+        df = df[df['datetime'] >= pd.to_datetime(start_date)]
 
     if end_date:
-        df = df[df['Local time'] <= pd.to_datetime(end_date)]
+        df = df[df['datetime'] <= pd.to_datetime(end_date)]
 
     # Create plot
     plt.figure(figsize=(8, 6))
@@ -846,7 +846,7 @@ def plot_mean_demand_by_temperature_range(
     df = df.copy()
 
     # Convert datetime
-    df['Local time'] = pd.to_datetime(df['Local time'])
+    df['datetime'] = pd.to_datetime(df['datetime'])
 
 
     # Convert Demand to numeric
@@ -865,10 +865,10 @@ def plot_mean_demand_by_temperature_range(
 
     # Filter date range
     if start_date:
-        df = df[df['Local time'] >= pd.to_datetime(start_date)]
+        df = df[df['datetime'] >= pd.to_datetime(start_date)]
 
     if end_date:
-        df = df[df['Local time'] <= pd.to_datetime(end_date)]
+        df = df[df['datetime'] <= pd.to_datetime(end_date)]
 
     # Create temperature bins
     df['temp_bin'] = pd.cut(
@@ -923,7 +923,7 @@ def plot_mean_demand_by_weather_range(
     df = df.copy()
 
     # Convert datetime
-    df['Local time'] = pd.to_datetime(df['Local time'])
+    df['datetime'] = pd.to_datetime(df['datetime'])
 
     # Convert Demand to numeric
     df['Demand'] = pd.to_numeric(
@@ -941,10 +941,10 @@ def plot_mean_demand_by_weather_range(
 
     # Filter date range
     if start_date:
-        df = df[df['Local time'] >= pd.to_datetime(start_date)]
+        df = df[df['datetime'] >= pd.to_datetime(start_date)]
 
     if end_date:
-        df = df[df['Local time'] <= pd.to_datetime(end_date)]
+        df = df[df['datetime'] <= pd.to_datetime(end_date)]
 
     # Create weather feature bins
     df[bin_col] = pd.cut(
@@ -1134,7 +1134,7 @@ if __name__ == "__main__":
 
     # Load the electricity demand data
     elec_demand_df = dc.read_csv_file(cfg.REPORT_DIR / "all_features_dataset.csv")
-    elec_demand_df["Local time"] = pd.to_datetime(elec_demand_df["Local time"])
+    elec_demand_df["datetime"] = pd.to_datetime(elec_demand_df["datetime"])
 
     #plot_daily_mean_demand(df=elec_demand_df)
     #plot_monthly_mean_demand(df=elec_demand_df)

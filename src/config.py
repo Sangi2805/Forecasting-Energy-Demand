@@ -18,7 +18,7 @@ MODEL_DIR = BASE_DIR / "models"
 REPORT_DIR = BASE_DIR / "reports"
 
 ELEC_DEMAND_FEATURES = [
-    "Local time",
+    "UTC time",
     "Demand",
     "Hour"
 ]
