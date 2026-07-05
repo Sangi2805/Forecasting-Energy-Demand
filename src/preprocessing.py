@@ -7,6 +7,8 @@ import data_collection as dc
 import os
 import re
 
+BASE_TEMP = 18.0
+
 
 def read_elec_demand_data():
     df = dc.read_csv_file(cfg.RAW_DATA_DIR / "electricity_demand_data.csv",cols=cfg.ELEC_DEMAND_FEATURES)   # all columns are needed for electricity demand data
@@ -193,6 +195,24 @@ def remove_units_from_column_names(df):
     )
     return df
 
+def add_model_features(df):
+    df = df.copy()
+
+    df["year"] = pd.to_datetime(df["date"], errors="coerce").dt.year
+    df["time_index"] = np.arange(len(df))
+
+    max_time_index = df["time_index"].max()
+    if max_time_index > 0:
+        df["time_index"] = df["time_index"] / max_time_index
+    else:
+        df["time_index"] = 0.0
+
+    df["temp_squared"] = df["temperature_2m"] ** 2
+    df["cooling_degree"] = np.maximum(df["temperature_2m"] - BASE_TEMP, 0)
+    df["heating_degree"] = np.maximum(BASE_TEMP - df["temperature_2m"], 0)
+
+    return df
+
 #process data
 
 def process_data():
@@ -295,6 +315,7 @@ def process_data():
     # rename column "UTC time" to "datetime" for consistency
     merged_df.rename(columns={"UTC time": "datetime"}, inplace=True)  
 
+    merged_df = add_model_features(merged_df)
 
     return merged_df
 
