@@ -43,7 +43,7 @@ LOSS_FUNCTION_NAME = "mse"
   
 PERMUTATION_SAMPLE_SIZE = 500
 RUN_PERMUTATION_IMPORTANCE = False
-RUN_NAME = "lstm_Toan_dual_input_future_features_mse"
+RUN_NAME = "lstm_Toan_dual_input_future_features_mse_sigmoid_output"
 TARGET_COL = "Demand"
 TIME_COL = "datetime"
 
@@ -173,7 +173,7 @@ def build_lstm_model(encoder_shape, future_shape):
     )(decoder)
 
     output = TimeDistributed(
-        Dense(1),
+        Dense(1, activation="sigmoid"),
         name="forecast_output",
     )(decoder)
 
@@ -195,6 +195,37 @@ def build_lstm_model(encoder_shape, future_shape):
     )
 
     return model
+
+
+def validate_sequence_alignment(name, input_df, X_encoder, X_future, y):
+    first_target_idx = WINDOW_SIZE
+    first_target_end_idx = WINDOW_SIZE + FORECAST_HORIZON - 1
+    first_encoder_end_idx = WINDOW_SIZE - 1
+
+    first_encoder_end_time = input_df.loc[first_encoder_end_idx, TIME_COL]
+    first_future_start_time = input_df.loc[first_target_idx, TIME_COL]
+    first_future_end_time = input_df.loc[first_target_end_idx, TIME_COL]
+
+    expected_future_start_time = first_encoder_end_time + pd.Timedelta(hours=1)
+
+    if first_future_start_time != expected_future_start_time:
+        raise ValueError(
+            f"{name} sequence alignment error: future starts at "
+            f"{first_future_start_time}, expected {expected_future_start_time}."
+        )
+
+    if X_future.shape[1] != FORECAST_HORIZON or y.shape[1] != FORECAST_HORIZON:
+        raise ValueError(
+            f"{name} sequence shape error: X_future={X_future.shape}, y={y.shape}."
+        )
+
+    print(f"{name} first encoder ends:", first_encoder_end_time)
+    print(
+        f"{name} first future/y window:",
+        first_future_start_time,
+        "to",
+        first_future_end_time,
+    )
 
 def save_training_loss_plot(history, output_path):
     plt.figure(figsize=(8, 5))
@@ -507,6 +538,7 @@ def log_mlflow_run_metadata(
 
         "optimizer": "adam",
         "loss": LOSS_FUNCTION_NAME,
+        "output_activation": "sigmoid",
 
         "encoder_feature_count": len(ENCODER_FEATURES),
         "future_feature_count": len(FUTURE_FEATURES),
@@ -671,6 +703,28 @@ def train_lstm():
         test_target_scaled,
     )
 
+    validate_sequence_alignment(
+        "TRAIN",
+        train_df.reset_index(drop=True),
+        X_train_encoder,
+        X_train_future,
+        y_train,
+    )
+    validate_sequence_alignment(
+        "VALIDATION",
+        val_input_df,
+        X_val_encoder,
+        X_val_future,
+        y_val,
+    )
+    validate_sequence_alignment(
+        "TEST",
+        test_input_df,
+        X_test_encoder,
+        X_test_future,
+        y_test,
+    )
+
     y_train = y_train.reshape((y_train.shape[0], y_train.shape[1], 1))
     y_val = y_val.reshape((y_val.shape[0], y_val.shape[1], 1))
     y_test = y_test.reshape((y_test.shape[0], y_test.shape[1], 1))
@@ -757,6 +811,10 @@ def train_lstm():
         y_pred_scaled = y_pred_scaled.squeeze(-1)
         y_test_scaled = y_test.squeeze(-1)
 
+        pred_scaled_min = float(np.min(y_pred_scaled))
+        pred_scaled_max = float(np.max(y_pred_scaled))
+        print(f"Scaled prediction min/max: {pred_scaled_min:.4f} / {pred_scaled_max:.4f}")
+
         y_pred_real = inverse_transform_target_sequences(target_scaler, y_pred_scaled)
         y_test_real = inverse_transform_target_sequences(target_scaler, y_test_scaled)
 
@@ -792,6 +850,8 @@ def train_lstm():
                 "test_horizon_mae_mean": float(np.mean(horizon_mae)),
                 "test_horizon_mae_first_hour": float(horizon_mae[0]),
                 "test_horizon_mae_last_hour": float(horizon_mae[-1]),
+                "test_pred_scaled_min": pred_scaled_min,
+                "test_pred_scaled_max": pred_scaled_max,
             }
         )
 
