@@ -12,3 +12,10 @@ __pycache__/
 mlruns/
 *.csv
 *png
+*.parquet
+*.log
+lightning_logs*/
+.ipynb_checkpoints/
+*.ckpt
+Untitled*
+mlflow.db
