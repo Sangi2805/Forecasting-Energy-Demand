@@ -14,8 +14,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.layers import LSTM, Dense, Dropout, RepeatVector, TimeDistributed
-from tensorflow.keras.layers import Input, Concatenate
-from tensorflow.keras.models import Model
+from tensorflow.keras.models import Sequential
 from tensorflow.keras.optimizers import Adam
 
 
@@ -43,7 +42,7 @@ LOSS_FUNCTION_NAME = "mse"
   
 PERMUTATION_SAMPLE_SIZE = 500
 RUN_PERMUTATION_IMPORTANCE = False
-RUN_NAME = "lstm_Toan_dual_input_future_features_mse"
+RUN_NAME = "lstm_Toan_mse_DROPOUT_RATE 0.1 and EPOCHS 40"
 TARGET_COL = "Demand"
 TIME_COL = "datetime"
 
@@ -52,7 +51,7 @@ random.seed(SEED)
 np.random.seed(SEED)
 tf.random.set_seed(SEED)
 
-ENCODER_FEATURES = [
+FEATURES = [
     "Demand",
 
     # weather nonlinear
@@ -69,6 +68,7 @@ ENCODER_FEATURES = [
     "month_sin",
     "month_cos",
     "holiday_encoded",
+    "time_index",
 
     # lag / rolling
     "demand_lag_1h",
@@ -77,7 +77,14 @@ ENCODER_FEATURES = [
     "demand_lag_72h",
     "demand_lag_168h",
     "demand_rolling_24h_mean",
+    "demand_rolling_48h_mean",
+    "demand_rolling_72h_mean",
+    "demand_rolling_168h_mean",
+    "demand_min_24h",
+    "demand_min_168h",
     "demand_max_24h",
+    "demand_max_48h",
+    "demand_max_72h",
     "demand_max_168h",
 
     # economic
@@ -85,111 +92,68 @@ ENCODER_FEATURES = [
     "NYPOP",
 ]
 
-
-FUTURE_FEATURES = [
-    # future weather forecast
-    "temperature_2m",
-    "temp_squared",
-    "cooling_degree",
-    "heating_degree",
-
-    # future calendar
-    "hour_sin",
-    "hour_cos",
-    "weekday_sin",
-    "weekday_cos",
-    "month_sin",
-    "month_cos",
-    "holiday_encoded",
-]
-
-
-FEATURES = list(dict.fromkeys(ENCODER_FEATURES + FUTURE_FEATURES))
-
-
-def inverse_transform_target_sequences(target_scaler, sequences):
+def inverse_transform_target_sequences(scaler, sequences):
     reshaped = np.asarray(sequences).reshape(-1, 1)
 
-    restored = target_scaler.inverse_transform(reshaped)[:, 0]
+    dummy = np.zeros((reshaped.shape[0], len(FEATURES)))
+    dummy[:, 0] = reshaped[:, 0]
+
+    restored = scaler.inverse_transform(dummy)[:, 0]
 
     return restored.reshape(np.asarray(sequences).shape)
 
 
-def create_sequences(data_encoder, data_future, target):
+def create_sequences(scaled_data):
     min_required_rows = WINDOW_SIZE + FORECAST_HORIZON
 
-    if len(target) < min_required_rows:
+    if len(scaled_data) < min_required_rows:
         raise ValueError(
             "Not enough rows to create sequences for the current "
             f"WINDOW_SIZE={WINDOW_SIZE} and FORECAST_HORIZON={FORECAST_HORIZON}. "
-            f"Need at least {min_required_rows} rows, got {len(target)}."
+            f"Need at least {min_required_rows} rows, got {len(scaled_data)}."
         )
 
-    X_encoder = []
-    X_future = []
+    X = []
     y = []
 
-    for i in range(WINDOW_SIZE, len(target) - FORECAST_HORIZON + 1):
-        X_encoder.append(data_encoder[i - WINDOW_SIZE:i])
-        X_future.append(data_future[i:i + FORECAST_HORIZON])
-        y.append(target[i:i + FORECAST_HORIZON])
+    for i in range(WINDOW_SIZE, len(scaled_data) - FORECAST_HORIZON + 1):
+        X.append(scaled_data[i - WINDOW_SIZE:i])
+        y.append(scaled_data[i:i + FORECAST_HORIZON, 0])
 
-    return np.array(X_encoder), np.array(X_future), np.array(y)
+    return np.array(X), np.array(y)
 
 
-def build_lstm_model(encoder_shape, future_shape):
-    encoder_input = Input(shape=encoder_shape, name="encoder_input")
-
-    encoder_output = LSTM(
-        128,
-        activation="tanh",
-        name="encoder_lstm",
-    )(encoder_input)
-
-    repeated = RepeatVector(
-        FORECAST_HORIZON,
-        name="repeat_encoder_state",
-    )(encoder_output)
-
-    future_input = Input(shape=future_shape, name="future_input")
-
-    decoder_input = Concatenate(name="decoder_context")(
+def build_lstm_model(input_shape):
+    model = Sequential(
         [
-            repeated,
-            future_input,
+            LSTM(
+                128,
+                activation="tanh",
+                return_sequences=False,
+                input_shape=input_shape,
+            ),
+            Dropout(DROPOUT_RATE),
+
+            RepeatVector(FORECAST_HORIZON),
+
+            LSTM(
+                64,
+                activation="tanh",
+                return_sequences=True,
+            ),
+            Dropout(DROPOUT_RATE),
+
+            TimeDistributed(Dense(1)),
         ]
     )
 
-    decoder = LSTM(
-        64,
-        activation="tanh",
-        return_sequences=True,
-        name="decoder_lstm",
-    )(decoder_input)
-
-    decoder = Dropout(
-        DROPOUT_RATE,
-        name="decoder_dropout",
-    )(decoder)
-
-    output = TimeDistributed(
-        Dense(1),
-        name="forecast_output",
-    )(decoder)
-
-    model = Model(
-        inputs=[
-            encoder_input,
-            future_input,
-        ],
-        outputs=output,
+    optimizer = Adam(
+        learning_rate=0.001,
+        clipnorm=1.0,
     )
 
     model.compile(
-        optimizer=Adam(
-            learning_rate=0.001,
-            clipnorm=1.0,
-        ),
+        optimizer=optimizer,
         loss=LOSS_FUNCTION_NAME,
         metrics=["mae"],
     )
@@ -345,23 +309,20 @@ def print_extreme_metrics(title, metrics):
     )
 
 
-def evaluate_mae(model, X_encoder, X_future, y_true, target_scaler, batch_size=64):
+def evaluate_mae(model, X, y_true, scaler, batch_size=64):
     y_pred = model.predict(
-        [
-            X_encoder,
-            X_future,
-        ],
+        X,
         batch_size=batch_size,
         verbose=0,
     )
 
     y_pred_real = inverse_transform_target_sequences(
-        target_scaler,
+        scaler,
         y_pred,
     )
 
     y_true_real = inverse_transform_target_sequences(
-        target_scaler,
+        scaler,
         y_true,
     )
 
@@ -375,36 +336,32 @@ def evaluate_mae(model, X_encoder, X_future, y_true, target_scaler, batch_size=6
 
 def permutation_importance(
     model,
-    X_encoder_test,
-    X_future_test,
+    X_test,
     y_test,
-    target_scaler,
-    encoder_feature_names,
-    future_feature_names,
+    scaler,
+    feature_names,
     sample_size=500,
     batch_size=64,
     random_state=42,
 ):
     rng = np.random.default_rng(random_state)
 
-    n_samples = min(sample_size, len(X_encoder_test))
+    n_samples = min(sample_size, len(X_test))
 
     sample_idx = rng.choice(
-        len(X_encoder_test),
+        len(X_test),
         size=n_samples,
         replace=False,
     )
 
-    X_encoder_sample = X_encoder_test[sample_idx].copy()
-    X_future_sample = X_future_test[sample_idx].copy()
+    X_sample = X_test[sample_idx].copy()
     y_sample = y_test[sample_idx].copy()
 
     baseline_mae = evaluate_mae(
         model=model,
-        X_encoder=X_encoder_sample,
-        X_future=X_future_sample,
+        X=X_sample,
         y_true=y_sample,
-        target_scaler=target_scaler,
+        scaler=scaler,
         batch_size=batch_size,
     )
 
@@ -414,31 +371,19 @@ def permutation_importance(
     print("-" * 60)
 
     results = []
-    all_features = (
-        [("encoder", idx, name) for idx, name in enumerate(encoder_feature_names)]
-        + [("future", idx, name) for idx, name in enumerate(future_feature_names)]
-    )
 
-    for feature_number, (feature_group, feature_idx, feature_name) in enumerate(
-        all_features,
-        start=1,
-    ):
-        X_encoder_perm = X_encoder_sample.copy()
-        X_future_perm = X_future_sample.copy()
+    for feature_idx, feature_name in enumerate(feature_names):
+        X_perm = X_sample.copy()
 
         perm_idx = rng.permutation(n_samples)
 
-        if feature_group == "encoder":
-            X_encoder_perm[:, :, feature_idx] = X_encoder_perm[perm_idx, :, feature_idx]
-        else:
-            X_future_perm[:, :, feature_idx] = X_future_perm[perm_idx, :, feature_idx]
+        X_perm[:, :, feature_idx] = X_perm[perm_idx, :, feature_idx]
 
         permuted_mae = evaluate_mae(
             model=model,
-            X_encoder=X_encoder_perm,
-            X_future=X_future_perm,
+            X=X_perm,
             y_true=y_sample,
-            target_scaler=target_scaler,
+            scaler=scaler,
             batch_size=batch_size,
         )
 
@@ -447,7 +392,6 @@ def permutation_importance(
         results.append(
             {
                 "feature": feature_name,
-                "feature_group": feature_group,
                 "baseline_mae": baseline_mae,
                 "permuted_mae": permuted_mae,
                 "importance": importance,
@@ -455,8 +399,7 @@ def permutation_importance(
         )
 
         print(
-            f"{feature_number:02d}/{len(all_features)} "
-            f"{feature_group:7s} "
+            f"{feature_idx + 1:02d}/{len(feature_names)} "
             f"{feature_name:35s} "
             f"importance = {importance:.3f}"
         )
@@ -470,15 +413,7 @@ def permutation_importance(
     return importance_df
 
 
-def log_mlflow_run_metadata(
-    df,
-    train_df,
-    val_df,
-    test_df,
-    X_train_encoder,
-    X_val_encoder,
-    X_test_encoder,
-):
+def log_mlflow_run_metadata(df, train_df, val_df, test_df, X_train, X_val, X_test):
     params = {
         "data_path": str(DATA_PATH),
         "target_col": TARGET_COL,
@@ -508,20 +443,18 @@ def log_mlflow_run_metadata(
         "optimizer": "adam",
         "loss": LOSS_FUNCTION_NAME,
 
-        "encoder_feature_count": len(ENCODER_FEATURES),
-        "future_feature_count": len(FUTURE_FEATURES),
         "feature_count": len(FEATURES),
         "row_count_after_dropna": len(df),
         "train_row_count": len(train_df),
         "validation_row_count": len(val_df),
         "test_row_count": len(test_df),
 
-        "train_sequence_count": len(X_train_encoder),
-        "validation_sequence_count": len(X_val_encoder),
-        "test_sequence_count": len(X_test_encoder),
+        "train_sequence_count": len(X_train),
+        "validation_sequence_count": len(X_val),
+        "test_sequence_count": len(X_test),
 
         "seed": SEED,
-        "lstm_architecture": "DualInput_EncoderLSTM128_RepeatVector_FutureFeatures_DecoderLSTM64_TimeDistributedDense",
+        "lstm_architecture": "Encoder_LSTM128_RepeatVector_Decoder_LSTM64_TimeDistributedDense",
 
         "reduce_lr_on_plateau": True,
         "reduce_lr_factor": 0.5,
@@ -535,8 +468,6 @@ def log_mlflow_run_metadata(
     }
 
     mlflow.log_params(params)
-    mlflow.log_text(json.dumps(ENCODER_FEATURES, indent=2), "encoder_features.json")
-    mlflow.log_text(json.dumps(FUTURE_FEATURES, indent=2), "future_features.json")
     mlflow.log_text(json.dumps(FEATURES, indent=2), "features.json")
 
 
@@ -624,65 +555,42 @@ def train_lstm():
 
     print("Scaling data...")
 
-    encoder_scaler = MinMaxScaler()
-    future_scaler = MinMaxScaler()
-    target_scaler = MinMaxScaler()
+    scaler = MinMaxScaler()
 
-    train_encoder_scaled = encoder_scaler.fit_transform(train_df[ENCODER_FEATURES])
-    train_future_scaled = future_scaler.fit_transform(train_df[FUTURE_FEATURES])
-    train_target_scaled = target_scaler.fit_transform(train_df[[TARGET_COL]]).reshape(-1)
+    train_scaled = scaler.fit_transform(train_df[FEATURES])
 
     val_input_df = pd.concat(
         [train_df.tail(WINDOW_SIZE), val_df],
         ignore_index=True,
     )
 
-    val_encoder_scaled = encoder_scaler.transform(val_input_df[ENCODER_FEATURES])
-    val_future_scaled = future_scaler.transform(val_input_df[FUTURE_FEATURES])
-    val_target_scaled = target_scaler.transform(val_input_df[[TARGET_COL]]).reshape(-1)
+    val_scaled = scaler.transform(val_input_df[FEATURES])
 
     test_input_df = pd.concat(
         [val_df.tail(WINDOW_SIZE), test_df],
         ignore_index=True,
     )
 
-    test_encoder_scaled = encoder_scaler.transform(test_input_df[ENCODER_FEATURES])
-    test_future_scaled = future_scaler.transform(test_input_df[FUTURE_FEATURES])
-    test_target_scaled = target_scaler.transform(test_input_df[[TARGET_COL]]).reshape(-1)
+    test_scaled = scaler.transform(test_input_df[FEATURES])
 
     print("Creating training sequences...")
-    X_train_encoder, X_train_future, y_train = create_sequences(
-        train_encoder_scaled,
-        train_future_scaled,
-        train_target_scaled,
-    )
+    X_train, y_train = create_sequences(train_scaled)
 
     print("Creating validation sequences...")
-    X_val_encoder, X_val_future, y_val = create_sequences(
-        val_encoder_scaled,
-        val_future_scaled,
-        val_target_scaled,
-    )
+    X_val, y_val = create_sequences(val_scaled)
 
     print("Creating testing sequences...")
-    X_test_encoder, X_test_future, y_test = create_sequences(
-        test_encoder_scaled,
-        test_future_scaled,
-        test_target_scaled,
-    )
+    X_test, y_test = create_sequences(test_scaled)
 
     y_train = y_train.reshape((y_train.shape[0], y_train.shape[1], 1))
     y_val = y_val.reshape((y_val.shape[0], y_val.shape[1], 1))
     y_test = y_test.reshape((y_test.shape[0], y_test.shape[1], 1))
 
-    print("Train encoder X shape:", X_train_encoder.shape)
-    print("Train future X shape:", X_train_future.shape)
+    print("Train X shape:", X_train.shape)
     print("Train y shape:", y_train.shape)
-    print("Validation encoder X shape:", X_val_encoder.shape)
-    print("Validation future X shape:", X_val_future.shape)
+    print("Validation X shape:", X_val.shape)
     print("Validation y shape:", y_val.shape)
-    print("Test encoder X shape :", X_test_encoder.shape)
-    print("Test future X shape :", X_test_future.shape)
+    print("Test X shape :", X_test.shape)
     print("Test y shape :", y_test.shape)
 
     with mlflow.start_run(run_name=RUN_NAME) as run:
@@ -691,16 +599,13 @@ def train_lstm():
             train_df=train_df,
             val_df=val_df,
             test_df=test_df,
-            X_train_encoder=X_train_encoder,
-            X_val_encoder=X_val_encoder,
-            X_test_encoder=X_test_encoder,
+            X_train=X_train,
+            X_val=X_val,
+            X_test=X_test,
         )
 
         print("Building model...")
-        model = build_lstm_model(
-            encoder_shape=(WINDOW_SIZE, len(ENCODER_FEATURES)),
-            future_shape=(FORECAST_HORIZON, len(FUTURE_FEATURES)),
-        )
+        model = build_lstm_model(input_shape=(WINDOW_SIZE, len(FEATURES)))
         model.summary()
 
         early_stop = EarlyStopping(
@@ -719,18 +624,9 @@ def train_lstm():
 
         print("Training...")
         history = model.fit(
-            [
-                X_train_encoder,
-                X_train_future,
-            ],
+            X_train,
             y_train,
-            validation_data=(
-                [
-                    X_val_encoder,
-                    X_val_future,
-                ],
-                y_val,
-            ),
+            validation_data=(X_val, y_val),
             shuffle=False,
             epochs=EPOCHS,
             batch_size=BATCH_SIZE,
@@ -746,10 +642,7 @@ def train_lstm():
 
         print("Predicting on test set...")
         y_pred_scaled = model.predict(
-            [
-                X_test_encoder,
-                X_test_future,
-            ],
+            X_test,
             batch_size=BATCH_SIZE,
             verbose=1,
         )
@@ -757,8 +650,8 @@ def train_lstm():
         y_pred_scaled = y_pred_scaled.squeeze(-1)
         y_test_scaled = y_test.squeeze(-1)
 
-        y_pred_real = inverse_transform_target_sequences(target_scaler, y_pred_scaled)
-        y_test_real = inverse_transform_target_sequences(target_scaler, y_test_scaled)
+        y_pred_real = inverse_transform_target_sequences(scaler, y_pred_scaled)
+        y_test_real = inverse_transform_target_sequences(scaler, y_test_scaled)
 
         y_pred_flat = y_pred_real.reshape(-1)
         y_test_flat = y_test_real.reshape(-1)
@@ -840,12 +733,10 @@ def train_lstm():
 
             importance_df = permutation_importance(
                 model=model,
-                X_encoder_test=X_test_encoder,
-                X_future_test=X_test_future,
+                X_test=X_test,
                 y_test=y_test,
-                target_scaler=target_scaler,
-                encoder_feature_names=ENCODER_FEATURES,
-                future_feature_names=FUTURE_FEATURES,
+                scaler=scaler,
+                feature_names=FEATURES,
                 sample_size=PERMUTATION_SAMPLE_SIZE,
                 batch_size=BATCH_SIZE,
                 random_state=SEED,
