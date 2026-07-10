@@ -1,0 +1,10 @@
+{
+  "day1_mape": 4.355,
+  "day2_mape": 4.486,
+  "day3_mape": 4.507,
+  "day4_mape": 4.516,
+  "day5_mape": 4.523,
+  "overall_mape": 4.478,
+  "best_checkpoint": "/opt/app-root/src/Forecasting-Energy-Demand/Sangar/checkpoints/tft_clean_best.ckpt",
+  "n_test_samples": 20465
+}
