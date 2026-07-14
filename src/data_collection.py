@@ -8,6 +8,19 @@ import holidays as hl
 import requests
 import os
 
+DEFAULT_WEATHER_VARIABLES = [
+    "temperature_2m",
+    "apparent_temperature",
+    "relative_humidity_2m",
+    "dew_point_2m",
+    "precipitation",
+    "rain",
+    "snowfall",
+    "cloud_cover",
+    "wind_speed_10m",
+    "wind_gusts_10m",
+]
+
 #########################################
 # Read column names of  a csv file 
 #########################################
@@ -67,9 +80,13 @@ def read_holiday_data(from_date: str, to_date: str) -> pd.DataFrame:
 def read_weather_data(
         begin_date: str, end_date: str, 
         lat: float=40.7128, lon: float=-74.0060,
-        hourly_variables: list[str]=["temperature_2m", "relative_humidity_2m", "wind_speed_10m"], 
-        isforecast: bool=False
+        hourly_variables: list[str] | None=None,
+        isforecast: bool=False,
+        timeout: int=30,
         ) -> pd.DataFrame:
+        if hourly_variables is None:
+            hourly_variables = DEFAULT_WEATHER_VARIABLES
+
         if isforecast:      
             url = "https://api.open-meteo.com/v1/forecast"
         else:       
@@ -84,13 +101,15 @@ def read_weather_data(
             "hourly": ",".join(hourly_variables),
             "timezone": "America/New_York"
         }
-        response = requests.get(url, params=params)
-        if response.status_code == 200:
+
+        try:
+            response = requests.get(url, params=params, timeout=timeout)
+            response.raise_for_status()
             data = response.json()
             hourly_data = data.get("hourly", {})
             return pd.DataFrame(hourly_data)
-        else:
-            print(f"Failed to fetch weather data: {response.status_code}")
+        except requests.RequestException as exc:
+            print(f"Failed to fetch weather data: {exc}")
             return pd.DataFrame()
 
 
