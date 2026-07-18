@@ -37,7 +37,9 @@ MODEL_PATH = cfg.MODEL_DIR / "tft_model.keras"
 PLOT_DIR = cfg.REPORT_DIR / "plots"
 
 WINDOW_SIZE = 24 * 7
-FORECAST_HORIZON = 72
+FORECAST_BLOCK_SIZE = 24
+FORECAST_BLOCK_COUNT = 5
+FORECAST_HORIZON = FORECAST_BLOCK_SIZE * FORECAST_BLOCK_COUNT
 
 TRAIN_END_DATE = "2024-04-30"
 VALIDATION_START_DATE = "2024-05-01"
@@ -51,9 +53,11 @@ HIDDEN_SIZE = 96
 ATTENTION_HEADS = 4
 DROPOUT_RATE = 0.15
 EARLY_STOPPING_PATIENCE = 8
-LOSS_FUNCTION_NAME = "mse"
+LOSS_FUNCTION_NAME = "weighted_mse_peak"
+PEAK_THRESHOLD = 0.75
+PEAK_WEIGHT = 3.0
 
-RUN_NAME = "TFT_Toan_known_unknown_features_July_14"
+RUN_NAME = f"TFT_Toan_with_loss_func_name_{LOSS_FUNCTION_NAME}_peak{PEAK_THRESHOLD}_and Weight_{PEAK_WEIGHT}"
 USE_MLFLOW = True
 TARGET_COL = "Demand"
 TIME_COL = "datetime"
@@ -74,9 +78,9 @@ KNOWN_FEATURES = [
     "relative_humidity_2m",
     "dew_point_2m",
     "precipitation",
-    "rain",
+    #"rain",
     "snowfall",
-    "cloud_cover",
+    #"cloud_cover",
     "wind_speed_10m",
     "wind_gusts_10m",
     "temp_squared",
@@ -105,9 +109,9 @@ KNOWN_FEATURES = [
 UNKNOWN_FEATURES = [
     TARGET_COL,
     "demand_lag_1h",
-    "demand_lag_2h",
-    "demand_lag_3h",
-    "demand_lag_4h",
+    #"demand_lag_2h",
+    #"demand_lag_3h",
+    #"demand_lag_4h",
     "demand_lag_24h",
     "demand_lag_48h",
     "demand_lag_72h",
@@ -117,18 +121,29 @@ UNKNOWN_FEATURES = [
     "demand_rolling_72h_mean",
     "demand_rolling_168h_mean",
     "demand_std_24h",
-    "demand_std_48h",
-    "demand_std_72h",
-    "demand_std_168h",
+    #"demand_std_48h",
+    #"demand_std_72h",
+    #"demand_std_168h",
     "demand_min_24h",
     "demand_min_48h",
-    "demand_min_72h",
-    "demand_min_168h",
+    #"demand_min_72h",
+    #"demand_min_168h",
     "demand_max_24h",
-    "demand_max_48h",
-    "demand_max_72h",
-    "demand_max_168h",
+    #"demand_max_48h",
+    #"demand_max_72h",
+    #"demand_max_168h",
 ]
+
+
+@tf.keras.utils.register_keras_serializable(package="custom_losses")
+def weighted_mse_peak(y_true, y_pred):
+    weights = tf.where(
+        y_true >= PEAK_THRESHOLD,
+        tf.cast(PEAK_WEIGHT, y_true.dtype),
+        tf.cast(1.0, y_true.dtype),
+    )
+    squared_error = tf.square(y_true - y_pred)
+    return tf.reduce_mean(weights * squared_error)
 
 
 def build_tft_model():
@@ -233,7 +248,7 @@ def build_tft_model():
 
     model.compile(
         optimizer=optimizer,
-        loss=LOSS_FUNCTION_NAME,
+        loss=weighted_mse_peak,
         metrics=["mae"],
     )
 
@@ -404,6 +419,54 @@ def calculate_horizon_mae(y_true, y_pred):
     return np.asarray(horizon_mae)
 
 
+def calculate_24h_block_metrics(y_true, y_pred, block_size=FORECAST_BLOCK_SIZE):
+    block_metrics = []
+
+    for start_idx in range(0, y_true.shape[1], block_size):
+        end_idx = min(start_idx + block_size, y_true.shape[1])
+
+        y_true_block = y_true[:, start_idx:end_idx].reshape(-1)
+        y_pred_block = y_pred[:, start_idx:end_idx].reshape(-1)
+
+        mae = mean_absolute_error(y_true_block, y_pred_block)
+        rmse = np.sqrt(mean_squared_error(y_true_block, y_pred_block))
+        mape, excluded_zeros = calculate_mape(y_true_block, y_pred_block)
+
+        block_metrics.append(
+            {
+                "block": f"block_{len(block_metrics) + 1}",
+                "hour_range": f"hours_{start_idx + 1}_{end_idx}",
+                "start_hour_ahead": start_idx + 1,
+                "end_hour_ahead": end_idx,
+                "mae": mae,
+                "rmse": rmse,
+                "mape": mape,
+                "mape_excluded_zero_demand_points": excluded_zeros,
+            }
+        )
+
+    return pd.DataFrame(block_metrics)
+
+
+def print_24h_block_metrics(block_metrics_df):
+    print("\n===== TEST MAE / MAPE BY 24-HOUR BLOCK =====")
+
+    for _, row in block_metrics_df.iterrows():
+        if np.isfinite(row["mape"]):
+            mape_text = f"{row['mape']:.2f}%"
+        else:
+            mape_text = "not available"
+
+        print(
+            f"{row['block']} ({row['hour_range']}): "
+            f"MAE = {row['mae']:.2f}, "
+            f"RMSE = {row['rmse']:.2f}, "
+            f"MAPE = {mape_text}, "
+            "excluded zero-demand points = "
+            f"{int(row['mape_excluded_zero_demand_points'])}"
+        )
+
+
 def calculate_mape(y_true, y_pred, epsilon=1e-6):
     nonzero_mask = np.abs(y_true) > epsilon
     excluded_zeros = np.size(y_true) - np.count_nonzero(nonzero_mask)
@@ -496,19 +559,51 @@ def save_forecast_plot(y_test_flat, y_pred_flat, output_path, limit=500):
     plt.close()
 
 
-def save_first_72h_forecast_plot(y_true, y_pred, output_path):
+def save_first_forecast_plot(y_true, y_pred, output_path):
     horizon = np.arange(1, FORECAST_HORIZON + 1)
 
     plt.figure(figsize=(12, 5))
     plt.plot(horizon, y_true[0], marker="o", label="Actual")
     plt.plot(horizon, y_pred[0], marker="o", label="Forecast")
     plt.legend()
-    plt.title("First Test Sample: 72-Hour TFT Forecast")
+    plt.title(f"First Test Sample: {FORECAST_HORIZON}-Hour TFT Forecast")
     plt.xlabel("Hours ahead")
     plt.ylabel(TARGET_COL)
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
+
+
+def save_first_forecast_block_plots(
+    y_true,
+    y_pred,
+    output_dir,
+    block_size=FORECAST_BLOCK_SIZE,
+):
+    block_plot_paths = []
+
+    for block_idx, start_idx in enumerate(range(0, FORECAST_HORIZON, block_size), start=1):
+        end_idx = min(start_idx + block_size, FORECAST_HORIZON)
+        horizon = np.arange(start_idx + 1, end_idx + 1)
+        output_path = output_dir / f"tft_first_24h_block_{block_idx}_forecast.png"
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(horizon, y_true[0, start_idx:end_idx], marker="o", label="Actual")
+        plt.plot(horizon, y_pred[0, start_idx:end_idx], marker="o", label="Forecast")
+        plt.legend()
+        plt.title(
+            "First Test Sample: "
+            f"Block {block_idx} Forecast (Hours {start_idx + 1}-{end_idx})"
+        )
+        plt.xlabel("Hours ahead")
+        plt.ylabel(TARGET_COL)
+        plt.tight_layout()
+        plt.savefig(output_path)
+        plt.close()
+
+        block_plot_paths.append(output_path)
+
+    return block_plot_paths
 
 
 def save_horizon_mae_plot(horizon_mae, output_path):
@@ -568,6 +663,8 @@ def log_mlflow_run_metadata(df, train_meta, val_meta, test_meta, X_train, X_val,
 
         "optimizer": "adam",
         "loss": LOSS_FUNCTION_NAME,
+        "peak_threshold": PEAK_THRESHOLD,
+        "peak_weight": PEAK_WEIGHT,
 
         "known_feature_count": len(KNOWN_FEATURES),
         "unknown_feature_count": len(UNKNOWN_FEATURES),
@@ -733,6 +830,11 @@ def train_tft():
         mape, excluded_zeros = calculate_mape(y_test_flat, y_pred_flat)
         extreme_metrics = calculate_extreme_metrics(y_test_flat, y_pred_flat)
         horizon_mae = calculate_horizon_mae(y_test_real, y_pred_real)
+        block_24h_metrics_df = calculate_24h_block_metrics(
+            y_test_real,
+            y_pred_real,
+            block_size=24,
+        )
 
         print("\n===== TEST RESULTS =====")
         print(f"MAE  : {mae:.2f}")
@@ -748,6 +850,7 @@ def train_tft():
         print(f"Horizon MAE first hour: {horizon_mae[0]:.2f}")
         print(f"Horizon MAE last hour : {horizon_mae[-1]:.2f}")
         print_extreme_metrics("MIN/MAX CHECK", extreme_metrics)
+        print_24h_block_metrics(block_24h_metrics_df)
 
         if mlflow_enabled:
             mlflow.log_metrics(
@@ -774,6 +877,16 @@ def train_tft():
             else:
                 mlflow.log_param("test_mape_status", "not_available_all_targets_are_zero")
 
+            for _, row in block_24h_metrics_df.iterrows():
+                block_name = row["block"]
+                mlflow.log_metric(f"test_{block_name}_mae", float(row["mae"]))
+                mlflow.log_metric(f"test_{block_name}_rmse", float(row["rmse"]))
+
+                if np.isfinite(row["mape"]):
+                    mlflow.log_metric(f"test_{block_name}_mape", float(row["mape"]))
+                else:
+                    mlflow.log_param(f"test_{block_name}_mape_status", "not_available")
+
         MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
         PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -782,13 +895,19 @@ def train_tft():
 
         training_loss_plot_path = PLOT_DIR / "tft_training_loss.png"
         forecast_plot_path = PLOT_DIR / "tft_test_actual_vs_forecast.png"
-        first_72h_plot_path = PLOT_DIR / "tft_first_72h_forecast.png"
+        first_forecast_plot_path = PLOT_DIR / f"tft_first_{FORECAST_HORIZON}h_forecast.png"
         horizon_mae_plot_path = PLOT_DIR / "tft_horizon_mae.png"
         horizon_mae_csv_path = PLOT_DIR / "tft_horizon_mae.csv"
+        block_24h_metrics_csv_path = PLOT_DIR / "tft_24h_block_metrics.csv"
 
         save_training_loss_plot(history, training_loss_plot_path)
         save_forecast_plot(y_test_flat, y_pred_flat, forecast_plot_path)
-        save_first_72h_forecast_plot(y_test_real, y_pred_real, first_72h_plot_path)
+        save_first_forecast_plot(y_test_real, y_pred_real, first_forecast_plot_path)
+        first_block_plot_paths = save_first_forecast_block_plots(
+            y_test_real,
+            y_pred_real,
+            PLOT_DIR,
+        )
         save_horizon_mae_plot(horizon_mae, horizon_mae_plot_path)
 
         horizon_mae_df = pd.DataFrame(
@@ -798,14 +917,18 @@ def train_tft():
             }
         )
         horizon_mae_df.to_csv(horizon_mae_csv_path, index=False)
+        block_24h_metrics_df.to_csv(block_24h_metrics_csv_path, index=False)
 
         if mlflow_enabled:
             mlflow.log_artifact(str(MODEL_PATH), artifact_path="model")
             mlflow.log_artifact(str(training_loss_plot_path), artifact_path="plots")
             mlflow.log_artifact(str(forecast_plot_path), artifact_path="plots")
-            mlflow.log_artifact(str(first_72h_plot_path), artifact_path="plots")
+            mlflow.log_artifact(str(first_forecast_plot_path), artifact_path="plots")
+            for block_plot_path in first_block_plot_paths:
+                mlflow.log_artifact(str(block_plot_path), artifact_path="plots")
             mlflow.log_artifact(str(horizon_mae_plot_path), artifact_path="plots")
             mlflow.log_artifact(str(horizon_mae_csv_path), artifact_path="metrics")
+            mlflow.log_artifact(str(block_24h_metrics_csv_path), artifact_path="metrics")
             print("MLflow run logged successfully.")
 
 

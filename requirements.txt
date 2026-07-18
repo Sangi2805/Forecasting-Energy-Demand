@@ -8,3 +8,7 @@ python-dotenv
 holidays
 dagshub
 xgboost
+tensorflow
+scikit-learn
+matplotlib
+requests
