@@ -92,6 +92,10 @@ KNOWN_FEATURES = [
     "temp_squared",
     "cooling_degree",
     "heating_degree",
+    "consecutive_hot_hours",
+    "rolling_max_temperature_24h",
+    "rolling_mean_temperature_24h",
+    "temperature_anomaly",
 
     # calendar / scheduled features
     "hour_sin",

@@ -41,6 +41,7 @@ FORECAST_BLOCK_SIZE = 24
 FORECAST_BLOCK_COUNT = 5
 FORECAST_HORIZON = FORECAST_BLOCK_SIZE * FORECAST_BLOCK_COUNT
 
+TRAIN_START_DATE = "2023-05-01"
 TRAIN_END_DATE = "2024-04-30"
 VALIDATION_START_DATE = "2024-05-01"
 VALIDATION_END_DATE = "2025-04-30"
@@ -87,6 +88,10 @@ KNOWN_FEATURES = [
     "temp_squared",
     "cooling_degree",
     "heating_degree",
+    "consecutive_hot_hours",
+    "rolling_max_temperature_24h",
+    "rolling_mean_temperature_24h",
+    "temperature_anomaly",
 
     # calendar / scheduled features
     "hour_sin",
@@ -290,6 +295,7 @@ def load_dataset():
 
     selected_columns = [TIME_COL, "date"] + KNOWN_FEATURES + UNKNOWN_FEATURES
     df = df[selected_columns].copy()
+
     df = df.dropna().reset_index(drop=True)
 
     if not df[TIME_COL].is_monotonic_increasing:
@@ -299,8 +305,9 @@ def load_dataset():
 
 
 def fit_transform_data(df):
+    train_start = pd.to_datetime(TRAIN_START_DATE)
     train_end = pd.to_datetime(TRAIN_END_DATE)
-    train_df = df[df["date"] <= train_end].copy()
+    train_df = df[(df["date"] >= train_start) & (df["date"] <= train_end)].copy()
 
     if train_df.empty:
         raise ValueError("Training set is empty. Check TRAIN_END_DATE.")

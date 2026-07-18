@@ -8,6 +8,7 @@ import os
 import re
 
 BASE_TEMP = 18.0
+HOT_TEMP_THRESHOLD = 27.0
 
 
 def read_elec_demand_data():
@@ -198,6 +199,9 @@ def remove_units_from_column_names(df):
 def add_model_features(df):
     df = df.copy()
 
+    if "datetime" in df.columns:
+        df = df.sort_values("datetime").reset_index(drop=True)
+
     df["year"] = pd.to_datetime(df["date"], errors="coerce").dt.year
     df["time_index"] = np.arange(len(df))
 
@@ -210,6 +214,29 @@ def add_model_features(df):
     df["temp_squared"] = df["temperature_2m"] ** 2
     df["cooling_degree"] = np.maximum(df["temperature_2m"] - BASE_TEMP, 0)
     df["heating_degree"] = np.maximum(BASE_TEMP - df["temperature_2m"], 0)
+    df["rolling_max_temperature_24h"] = (
+        df["temperature_2m"]
+        .rolling(window=24, min_periods=1)
+        .max()
+    )
+    df["rolling_mean_temperature_24h"] = (
+        df["temperature_2m"]
+        .rolling(window=24, min_periods=1)
+        .mean()
+    )
+    df["temperature_anomaly"] = (
+        df["temperature_2m"] - df["rolling_mean_temperature_24h"]
+    )
+
+    is_hot_hour = df["temperature_2m"] >= HOT_TEMP_THRESHOLD
+    hot_spell_group = is_hot_hour.ne(is_hot_hour.shift(fill_value=False)).cumsum()
+    df["consecutive_hot_hours"] = (
+        is_hot_hour
+        .groupby(hot_spell_group)
+        .cumcount()
+        .add(1)
+        .where(is_hot_hour, 0)
+    )
 
     return df
 
