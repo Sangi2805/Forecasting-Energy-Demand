@@ -1,0 +1,17 @@
+{
+  "day_mape": {
+    "1": 2.206,
+    "2": 2.543,
+    "3": 2.859,
+    "4": 3.319,
+    "5": 3.814
+  },
+  "overall_mape": 2.948,
+  "seasonal_mape": {
+    "Winter": 2.933,
+    "Spring": 3.105,
+    "Summer": 3.403,
+    "Fall": 2.271
+  },
+  "checkpoint": "zonal_tft_refit2023_fx_best.ckpt (2 epochs, lr=3e-4, +2023, +fx)"
+}
