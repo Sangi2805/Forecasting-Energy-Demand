@@ -1,0 +1,231 @@
+{
+  "mode": "day1",
+  "stride": 6,
+  "checkpoint": "zonal_tft_refit2023_fx_best.ckpt",
+  "results": {
+    "lead1::BASELINE": {
+      "lead": 1,
+      "run": "BASELINE",
+      "mape": 2.0681,
+      "delta": null,
+      "windows": 3456,
+      "secs": 180.6
+    },
+    "lead1::temperature_2m": {
+      "lead": 1,
+      "run": "temperature_2m",
+      "mape": 3.0695,
+      "delta": 1.0014,
+      "windows": 3456,
+      "secs": 177.3
+    },
+    "lead1::apparent_temperature": {
+      "lead": 1,
+      "run": "apparent_temperature",
+      "mape": 2.3368,
+      "delta": 0.2687,
+      "windows": 3456,
+      "secs": 179.7
+    },
+    "lead1::relative_humidity_2m": {
+      "lead": 1,
+      "run": "relative_humidity_2m",
+      "mape": 2.6747,
+      "delta": 0.6066,
+      "windows": 3456,
+      "secs": 177.7
+    },
+    "lead1::wind_speed_10m": {
+      "lead": 1,
+      "run": "wind_speed_10m",
+      "mape": 2.0726,
+      "delta": 0.0045,
+      "windows": 3456,
+      "secs": 176.6
+    },
+    "lead1::shortwave_radiation": {
+      "lead": 1,
+      "run": "shortwave_radiation",
+      "mape": 4.3373,
+      "delta": 2.2692,
+      "windows": 3456,
+      "secs": 178.1
+    },
+    "lead1::cloud_cover": {
+      "lead": 1,
+      "run": "cloud_cover",
+      "mape": 2.1371,
+      "delta": 0.069,
+      "windows": 3456,
+      "secs": 177.9
+    },
+    "lead1::temp_vshape": {
+      "lead": 1,
+      "run": "temp_vshape",
+      "mape": 3.0612,
+      "delta": 0.9931,
+      "windows": 3456,
+      "secs": 181.1
+    },
+    "lead1::fx_app_roll72": {
+      "lead": 1,
+      "run": "fx_app_roll72",
+      "mape": 2.7063,
+      "delta": 0.6382,
+      "windows": 3456,
+      "secs": 179.5
+    },
+    "lead1::fx_cdh24": {
+      "lead": 1,
+      "run": "fx_cdh24",
+      "mape": 2.2004,
+      "delta": 0.1323,
+      "windows": 3456,
+      "secs": 178.5
+    },
+    "lead1::fx_hot_streak_day": {
+      "lead": 1,
+      "run": "fx_hot_streak_day",
+      "mape": 2.0653,
+      "delta": -0.0028,
+      "windows": 3456,
+      "secs": 178.3
+    },
+    "lead1::demand_lag24": {
+      "lead": 1,
+      "run": "demand_lag24",
+      "mape": 2.0419,
+      "delta": -0.0262,
+      "windows": 3456,
+      "secs": 177.1
+    },
+    "lead1::demand_lag168": {
+      "lead": 1,
+      "run": "demand_lag168",
+      "mape": 2.0461,
+      "delta": -0.022,
+      "windows": 3456,
+      "secs": 178.6
+    },
+    "lead1::demand_roll24_mean": {
+      "lead": 1,
+      "run": "demand_roll24_mean",
+      "mape": 2.0709,
+      "delta": 0.0028,
+      "windows": 3456,
+      "secs": 178.6
+    },
+    "lead1::demand_roll168_mean": {
+      "lead": 1,
+      "run": "demand_roll168_mean",
+      "mape": 2.0774,
+      "delta": 0.0093,
+      "windows": 3456,
+      "secs": 180.5
+    },
+    "lead1::demand_roll24_std": {
+      "lead": 1,
+      "run": "demand_roll24_std",
+      "mape": 2.0833,
+      "delta": 0.0152,
+      "windows": 3456,
+      "secs": 178.6
+    },
+    "lead1::hour": {
+      "lead": 1,
+      "run": "hour",
+      "mape": 3.2273,
+      "delta": 1.1592,
+      "windows": 3456,
+      "secs": 179.5
+    },
+    "lead1::day_of_week": {
+      "lead": 1,
+      "run": "day_of_week",
+      "mape": 2.2235,
+      "delta": 0.1554,
+      "windows": 3456,
+      "secs": 178.9
+    },
+    "lead1::month": {
+      "lead": 1,
+      "run": "month",
+      "mape": 2.082,
+      "delta": 0.0139,
+      "windows": 3456,
+      "secs": 177.6
+    },
+    "lead1::is_weekend": {
+      "lead": 1,
+      "run": "is_weekend",
+      "mape": 3.1863,
+      "delta": 1.1182,
+      "windows": 3456,
+      "secs": 179.3
+    },
+    "lead1::is_holiday": {
+      "lead": 1,
+      "run": "is_holiday",
+      "mape": 2.1641,
+      "delta": 0.096,
+      "windows": 3456,
+      "secs": 177.7
+    },
+    "lead1::GROUP temperature family": {
+      "lead": 1,
+      "run": "GROUP temperature family",
+      "mape": 5.558,
+      "delta": 3.4899,
+      "windows": 3456,
+      "secs": 177.3
+    },
+    "lead1::GROUP solar": {
+      "lead": 1,
+      "run": "GROUP solar",
+      "mape": 4.3599,
+      "delta": 2.2918,
+      "windows": 3456,
+      "secs": 179.1
+    },
+    "lead1::GROUP heat memory": {
+      "lead": 1,
+      "run": "GROUP heat memory",
+      "mape": 3.1402,
+      "delta": 1.0721,
+      "windows": 3456,
+      "secs": 179.6
+    },
+    "lead1::GROUP all raw weather": {
+      "lead": 1,
+      "run": "GROUP all raw weather",
+      "mape": 5.5095,
+      "delta": 3.4414,
+      "windows": 3456,
+      "secs": 178.0
+    },
+    "lead1::GROUP all weather-derived": {
+      "lead": 1,
+      "run": "GROUP all weather-derived",
+      "mape": 8.1144,
+      "delta": 6.0463,
+      "windows": 3456,
+      "secs": 178.4
+    },
+    "lead1::GROUP demand history": {
+      "lead": 1,
+      "run": "GROUP demand history",
+      "mape": 2.039,
+      "delta": -0.0291,
+      "windows": 3456,
+      "secs": 178.5
+    },
+    "lead1::GROUP calendar": {
+      "lead": 1,
+      "run": "GROUP calendar",
+      "mape": 4.4124,
+      "delta": 2.3443,
+      "windows": 3456,
+      "secs": 179.7
+    }
+  }
+}

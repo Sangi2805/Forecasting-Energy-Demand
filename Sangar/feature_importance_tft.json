@@ -1,0 +1,56 @@
+{
+  "n_batches": 80,
+  "checkpoint": "zonal_tft_refit2023_fx_best.ckpt",
+  "window": "test (2024-01-23 onward), observed weather",
+  "importance": {
+    "encoder_variables": {
+      "demand": 16.351,
+      "temp_vshape": 9.906,
+      "relative_humidity_2m": 8.076,
+      "shortwave_radiation": 7.561,
+      "apparent_temperature": 7.146,
+      "demand_roll168_mean": 5.34,
+      "is_weekend": 4.243,
+      "fx_app_roll72": 4.217,
+      "demand_lag24": 4.058,
+      "demand_roll24_std": 3.844,
+      "demand_roll24_mean": 3.747,
+      "relative_time_idx": 3.629,
+      "is_holiday": 3.565,
+      "day_of_week": 3.05,
+      "time_idx": 2.92,
+      "temperature_2m": 2.631,
+      "hour": 2.455,
+      "fx_cdh24": 2.121,
+      "fx_hot_streak_day": 1.65,
+      "cloud_cover": 1.069,
+      "demand_lag168": 1.031,
+      "month": 0.966,
+      "wind_speed_10m": 0.424
+    },
+    "decoder_variables": {
+      "shortwave_radiation": 13.058,
+      "fx_cdh24": 12.199,
+      "hour": 9.131,
+      "is_holiday": 7.414,
+      "temp_vshape": 7.111,
+      "temperature_2m": 7.021,
+      "cloud_cover": 6.903,
+      "is_weekend": 6.284,
+      "relative_humidity_2m": 6.106,
+      "time_idx": 5.889,
+      "fx_app_roll72": 5.036,
+      "apparent_temperature": 3.64,
+      "month": 3.501,
+      "fx_hot_streak_day": 3.204,
+      "day_of_week": 1.961,
+      "wind_speed_10m": 1.165,
+      "relative_time_idx": 0.378
+    },
+    "static_variables": {
+      "zone": 77.487,
+      "demand_center": 11.584,
+      "demand_scale": 10.928
+    }
+  }
+}
