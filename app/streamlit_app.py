@@ -255,6 +255,113 @@ def day_summary(day_df: pd.DataFrame, actual_col: str = "actual", pred_col: str 
     }
 
 
+def predictions_for_calendar_day(
+    zonal: pd.DataFrame,
+    day_start: pd.Timestamp,
+    target_mape: float,
+    seed: int = 11,
+) -> pd.DataFrame:
+    """
+    Day-ahead mock forecast for one UTC calendar day (24h).
+    Same seasonal-naive + MAPE calibration used in the Forecasting tab.
+    """
+    day_start = pd.Timestamp(day_start).tz_convert("UTC").floor("D")
+    end = day_start + pd.Timedelta(hours=23)
+    actual = zonal.loc[day_start:end].copy()
+    if actual.empty or len(actual) < 20:
+        return pd.DataFrame()
+
+    cols = ZONE_COLS + ["NYISO_TOTAL"]
+    pred = actual[cols].copy()
+    for col in cols:
+        naive = zonal[col].shift(168).reindex(actual.index)
+        naive = naive.interpolate(limit_direction="both").bfill().ffill()
+        pred[col] = naive.to_numpy(dtype=float)
+
+    day_seed = int(day_start.strftime("%Y%m%d"))
+    rng = np.random.default_rng(seed + day_seed)
+    y = actual["NYISO_TOTAL"].to_numpy(dtype=float)
+    yhat = pred["NYISO_TOTAL"].to_numpy(dtype=float)
+    ape0 = float(np.mean(np.abs(y - yhat) / np.maximum(y, 1.0)) * 100)
+    scale = (target_mape / ape0) if ape0 > 1e-6 else 1.0
+    noise = rng.normal(0.0, 0.005, size=len(y))
+    yhat = y + (yhat - y) * scale + y * noise
+    pred["NYISO_TOTAL"] = np.clip(yhat, 0, None)
+
+    zone_mat = pred[ZONE_COLS].to_numpy(dtype=float)
+    row_sums = zone_mat.sum(axis=1, keepdims=True)
+    row_sums = np.where(row_sums < 1e-6, 1.0, row_sums)
+    zone_mat = zone_mat / row_sums * pred["NYISO_TOTAL"].to_numpy()[:, None]
+    pred[ZONE_COLS] = zone_mat
+
+    out = actual[cols].copy()
+    out = out.rename(columns={c: f"actual_{c}" for c in cols})
+    for c in cols:
+        out[f"pred_{c}"] = pred[c].values
+    out["actual"] = out["actual_NYISO_TOTAL"]
+    out["predicted"] = out["pred_NYISO_TOTAL"]
+    return out
+
+
+def score_day_frame(day_df: pd.DataFrame) -> dict[str, float | str]:
+    """Peak / wMAPE / peak-APE scorecard for one completed forecast day."""
+    actual = day_df["actual"]
+    predicted = day_df["predicted"]
+    wmape = float(np.sum(np.abs(actual - predicted)) / np.maximum(actual.sum(), 1.0) * 100)
+    mape = float(np.mean(np.abs(actual - predicted) / actual.clip(lower=1)) * 100)
+    a_peak = float(actual.max())
+    p_peak = float(predicted.max())
+    peak_ape = abs(p_peak - a_peak) / max(a_peak, 1.0) * 100
+    a_peak_ts = actual.idxmax()
+    p_peak_ts = predicted.idxmax()
+    return {
+        "wmape": wmape,
+        "mape": mape,
+        "accuracy": max(0.0, 100.0 - wmape),
+        "actual_peak_mw": a_peak,
+        "predicted_peak_mw": p_peak,
+        "peak_ape": peak_ape,
+        "actual_peak_hour": a_peak_ts.strftime("%H:%M"),
+        "predicted_peak_hour": p_peak_ts.strftime("%H:%M"),
+        "actual_avg_mw": float(actual.mean()),
+        "predicted_avg_mw": float(predicted.mean()),
+    }
+
+
+@st.cache_data(show_spinner=False)
+def build_track_record(_zonal_mtime: float, n_days: int = 45) -> pd.DataFrame:
+    """
+    Score the last N complete UTC days: day-ahead mock vs archive actuals.
+    Returns one row per day (newest first).
+    """
+    zonal = load_zonal()
+    day_mape = load_day_mape()
+    target = float(day_mape.get(1, 2.48))
+    last = zonal.index.max().floor("h")
+    # Prefer complete days only (exclude partial last day if incomplete)
+    end_day = last.floor("D")
+    if last.hour < 23:
+        end_day = end_day - pd.Timedelta(days=1)
+
+    rows: list[dict] = []
+    for i in range(n_days):
+        day_start = end_day - pd.Timedelta(days=i)
+        day_df = predictions_for_calendar_day(zonal, day_start, target_mape=target)
+        if day_df.empty or len(day_df) < 20:
+            continue
+        sc = score_day_frame(day_df)
+        rows.append(
+            {
+                "date": day_start.strftime("%Y-%m-%d"),
+                "date_ts": day_start,
+                **sc,
+            }
+        )
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values("date_ts", ascending=False).reset_index(drop=True)
+
+
 def forecast_scope_columns(scope: str) -> tuple[str, str, str]:
     """Return (actual_col, pred_col, display_label) for Statewide or a zone."""
     if scope == "Statewide":
@@ -513,8 +620,8 @@ with st.sidebar:
     )
     st.divider()
     st.caption(
-        "Live tab uses NYISO P-58B 5-min public load CSVs. "
-        "Forecasting uses archive actuals + calibrated day-ahead placeholders."
+        "Live: NYISO P-58B 5-min CSVs. "
+        "Forecasting + Track record: archive actuals with calibrated day-ahead placeholders."
     )
 
 # Prefetch live for badge (cached 60s)
@@ -536,7 +643,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tab_fc, tab_live = st.tabs(["Forecasting", "Live data"])
+tab_fc, tab_live, tab_track = st.tabs(["Forecasting", "Live data", "Track record"])
 
 
 # ---------------------------------------------------------------------------
@@ -854,3 +961,165 @@ with tab_fc:
         )
     )
     st.plotly_chart(fig_zmap, use_container_width=True)
+
+
+# ---------------------------------------------------------------------------
+# Track record — scored past day-ahead forecasts vs realized demand
+# ---------------------------------------------------------------------------
+with tab_track:
+    st.markdown("#### Track record")
+    st.caption(
+        "Daily scores for completed day-ahead forecasts vs archive actuals "
+        "(seasonal-naive placeholders calibrated to reported Day-1 MAPE). "
+        "Replace with logged model outputs when prediction archives are saved."
+    )
+
+    lookback = st.selectbox(
+        "Lookback window",
+        options=[14, 30, 45, 60, 90],
+        index=2,
+        format_func=lambda d: f"Last {d} days",
+        key="track_lookback",
+    )
+    zonal_mtime = ZONAL_PATH.stat().st_mtime if ZONAL_PATH.exists() else 0.0
+    ledger = build_track_record(zonal_mtime, n_days=int(lookback))
+
+    if ledger.empty:
+        st.warning("Not enough complete days in the archive to build a track record.")
+    else:
+        avg_wmape = float(ledger["wmape"].mean())
+        avg_peak = float(ledger["peak_ape"].mean())
+        best = ledger.loc[ledger["wmape"].idxmin()]
+        worst = ledger.loc[ledger["wmape"].idxmax()]
+        hit_rate = float((ledger["wmape"] <= 3.0).mean() * 100)
+
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("Avg wMAPE", f"{avg_wmape:.2f}%")
+        k2.metric("Avg peak APE", f"{avg_peak:.2f}%")
+        k3.metric("Days ≤ 3% wMAPE", f"{hit_rate:.0f}%")
+        k4.metric("Best day", f"{best['date']}", delta=f"{best['wmape']:.2f}% wMAPE")
+        k5.metric("Worst day", f"{worst['date']}", delta=f"{worst['wmape']:.2f}% wMAPE", delta_color="inverse")
+
+        chart_col, replay_col = st.columns([1.15, 1])
+
+        with chart_col:
+            st.markdown("##### Daily wMAPE")
+            trend = ledger.sort_values("date_ts")
+            fig_tr = go.Figure()
+            fig_tr.add_trace(
+                go.Scatter(
+                    x=trend["date"],
+                    y=trend["wmape"],
+                    mode="lines+markers",
+                    name="wMAPE",
+                    line=dict(color=COLORS["accent"], width=2.2),
+                    marker=dict(size=6),
+                    fill="tozeroy",
+                    fillcolor="rgba(26,155,142,0.12)",
+                )
+            )
+            fig_tr.add_hline(
+                y=avg_wmape,
+                line_dash="dot",
+                line_color=COLORS["muted"],
+                annotation_text=f"avg {avg_wmape:.2f}%",
+                annotation_position="top left",
+                annotation_font_color=COLORS["muted"],
+            )
+            fig_tr.update_layout(
+                **{k: v for k, v in PLOTLY_LAYOUT.items() if k != "margin"},
+                height=320,
+                margin=dict(l=48, r=16, t=24, b=40),
+                yaxis_title="wMAPE %",
+                xaxis_title=None,
+                showlegend=False,
+            )
+            st.plotly_chart(fig_tr, use_container_width=True)
+
+        with replay_col:
+            st.markdown("##### Day replay")
+            date_options = ledger["date"].tolist()
+            pick = st.selectbox("Replay day", options=date_options, key="track_replay_day")
+            day_start = pd.Timestamp(pick, tz="UTC")
+            target = float(load_day_mape().get(1, 2.48))
+            replay = predictions_for_calendar_day(zonal, day_start, target_mape=target)
+            if replay.empty:
+                st.info("No hourly series for that day.")
+            else:
+                sc = score_day_frame(replay)
+                r1, r2, r3 = st.columns(3)
+                r1.metric("wMAPE", f"{sc['wmape']:.2f}%")
+                r2.metric("Peak APE", f"{sc['peak_ape']:.2f}%")
+                r3.metric(
+                    "Peaks (P / A)",
+                    f"{sc['predicted_peak_mw']/1000:.1f} / {sc['actual_peak_mw']/1000:.1f} GW",
+                )
+                fig_rp = go.Figure()
+                fig_rp.add_trace(
+                    go.Scatter(
+                        x=replay.index,
+                        y=replay["actual"],
+                        name="Actual",
+                        mode="lines",
+                        line=dict(color=COLORS["actual"], width=2.4),
+                    )
+                )
+                fig_rp.add_trace(
+                    go.Scatter(
+                        x=replay.index,
+                        y=replay["predicted"],
+                        name="Predicted",
+                        mode="lines",
+                        line=dict(color=COLORS["forecast"], width=2.4, dash="dash"),
+                    )
+                )
+                fig_rp.update_layout(
+                    **{k: v for k, v in PLOTLY_LAYOUT.items() if k not in ("margin", "legend")},
+                    height=260,
+                    margin=dict(l=48, r=16, t=16, b=32),
+                    yaxis_title="MW",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                )
+                st.plotly_chart(fig_rp, use_container_width=True)
+
+        st.markdown("##### Daily scorecard")
+        table = ledger[
+            [
+                "date",
+                "predicted_peak_mw",
+                "actual_peak_mw",
+                "peak_ape",
+                "wmape",
+                "mape",
+                "accuracy",
+                "predicted_peak_hour",
+                "actual_peak_hour",
+            ]
+        ].copy()
+        table = table.rename(
+            columns={
+                "date": "Date",
+                "predicted_peak_mw": "Pred peak (MW)",
+                "actual_peak_mw": "Actual peak (MW)",
+                "peak_ape": "Peak APE %",
+                "wmape": "wMAPE %",
+                "mape": "MAPE %",
+                "accuracy": "Accuracy %",
+                "predicted_peak_hour": "Pred peak hour",
+                "actual_peak_hour": "Actual peak hour",
+            }
+        )
+        st.dataframe(
+            table,
+            use_container_width=True,
+            hide_index=True,
+            height=360,
+            column_config={
+                "Pred peak (MW)": st.column_config.NumberColumn(format="%,.0f"),
+                "Actual peak (MW)": st.column_config.NumberColumn(format="%,.0f"),
+                "Peak APE %": st.column_config.NumberColumn(format="%.2f"),
+                "wMAPE %": st.column_config.NumberColumn(format="%.2f"),
+                "MAPE %": st.column_config.NumberColumn(format="%.2f"),
+                "Accuracy %": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
