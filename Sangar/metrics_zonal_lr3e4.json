@@ -1,0 +1,17 @@
+{
+  "day_mape": {
+    "1": 2.482,
+    "2": 2.887,
+    "3": 3.139,
+    "4": 3.518,
+    "5": 3.956
+  },
+  "overall_mape": 3.196,
+  "seasonal_mape": {
+    "Winter": 3.35,
+    "Spring": 3.369,
+    "Summer": 3.596,
+    "Fall": 2.351
+  },
+  "checkpoint": "zonal_tft_lr3e4_best.ckpt (epoch 1, lr=3e-4, val_loss 20.86)"
+}

@@ -11,7 +11,11 @@ import os
 #########################################
 # Read column names of  a csv file 
 #########################################
-def read_col_names(file_path: Path)-> None:
+def read_col_names(file_path: Path | str)-> None:
+    file_path = Path(file_path)
+    if not file_path.is_absolute():
+        file_path = cfg.BASE_DIR / file_path
+
     if file_path.exists():
         columns = pd.read_csv(file_path, nrows=0).columns
         print(columns.tolist())
@@ -20,7 +24,11 @@ def read_col_names(file_path: Path)-> None:
 #########################################
 # Read csv file
 #########################################
-def read_csv_file(file_path: Path, cols: list[str] = None) -> pd.DataFrame:
+def read_csv_file(file_path: Path | str, cols: list[str] = None) -> pd.DataFrame:
+    file_path = Path(file_path)
+    if not file_path.is_absolute():
+        file_path = cfg.BASE_DIR / file_path
+
     if file_path.exists():
         data = pd.read_csv(file_path, usecols=cols)
         return data
@@ -66,6 +74,7 @@ def read_weather_data(
             url = "https://api.open-meteo.com/v1/forecast"
         else:       
             url = "https://archive-api.open-meteo.com/v1/archive"
+            
 
         params = {
             "latitude": lat,

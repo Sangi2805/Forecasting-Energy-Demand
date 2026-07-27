@@ -19,79 +19,93 @@ REPORT_DIR = BASE_DIR / "reports"
 
 ELEC_DEMAND_FEATURES = [
     "Local time",
-    "Demand"
+    "Demand",
+    "Hour"
 ]
 ALL_WEATHER_FEATURES = [
     "time",
 
-    "temperature_2m (°C)",
-    "relative_humidity_2m (%)",
-    "dew_point_2m (°C)",
-    "apparent_temperature (°C)",
+    "temperature_2m",
+    "relative_humidity_2m",
+    "dew_point_2m",
+    "apparent_temperature",
 
-    "precipitation (mm)",
-    "rain (mm)",
-    "snowfall (cm)",
-    "snow_depth (m)",
+    "precipitation",
+    "rain",
+    "snowfall",
+    "snow_depth",
 
-    "weather_code (wmo code)",
+    "weather_code",
 
-    "pressure_msl (hPa)",
-    "surface_pressure (hPa)",
+    "pressure_msl",
+    "surface_pressure",
 
-    "cloud_cover (%)",
-    "cloud_cover_low (%)",
-    "cloud_cover_mid (%)",
-    "cloud_cover_high (%)",
+    "cloud_cover",
+    "cloud_cover_low",
+    "cloud_cover_mid",
+    "cloud_cover_high",
 
-    "et0_fao_evapotranspiration (mm)",
-    "vapour_pressure_deficit (kPa)",
+    "et0_fao_evapotranspiration",
+    "vapour_pressure_deficit",
 
-    "wind_speed_10m (km/h)",
-    "wind_speed_100m (km/h)",
-    "wind_direction_10m (°)",
-    "wind_direction_100m (°)",
-    "wind_gusts_10m (km/h)",
+    "wind_speed_10m",
+    "wind_speed_100m",
+    "wind_direction_10m",
+    "wind_direction_100m",
+    "wind_gusts_10m",
 
-    "soil_temperature_0_to_7cm (°C)",
-    "soil_temperature_7_to_28cm (°C)",
-    "soil_temperature_28_to_100cm (°C)",
-    "soil_temperature_100_to_255cm (°C)",
+    "soil_temperature_0_to_7cm",
+    "soil_temperature_7_to_28cm",
+    "soil_temperature_28_to_100cm",
+    "soil_temperature_100_to_255cm",
 
-    "soil_moisture_0_to_7cm (m³/m³)",
-    "soil_moisture_7_to_28cm (m³/m³)",
-    "soil_moisture_28_to_100cm (m³/m³)",
-    "soil_moisture_100_to_255cm (m³/m³)"
+    "soil_moisture_0_to_7cm",
+    "soil_moisture_7_to_28cm",
+    "soil_moisture_28_to_100cm",
+    "soil_moisture_100_to_255cm"
 ]
 
 SEL_WEATHER_FEATURES = [
     "time",
-    "temperature_2m (°C)",
-    "apparent_temperature (°C)",
-    "relative_humidity_2m (%)",
-    "dew_point_2m (°C)",
-    "precipitation (mm)",
-    "rain (mm)",
-    "snowfall (cm)",
-    "cloud_cover (%)",
-    "wind_speed_10m (km/h)",
-    "wind_gusts_10m (km/h)",
-    "weather_code (wmo code)"
+    "temperature_2m",
+    "apparent_temperature",
+    "relative_humidity_2m",
+    "dew_point_2m",
+    "precipitation",
+    "rain",
+    "snowfall",
+    "cloud_cover",
+    "wind_speed_10m",
+    "wind_gusts_10m"
+    ]
+
+CORRELATION_HEATMAP_COLUMNS = [
+    "Demand",
+    "temperature_2m",
+    "apparent_temperature",
+    "relative_humidity_2m",
+    "dew_point_2m",
+    "precipitation",
+    "rain",
+    "snowfall",
+    "cloud_cover",
+    "wind_speed_10m",
+    "wind_gusts_10m"
 ]
 
 LAG_WEATHER_FEATURES = [
-    "temperature_2m (°C)",
-    "relative_humidity_2m (%)",
-    "dew_point_2m (°C)",
-    "apparent_temperature (°C)"
+    "temperature_2m",
+    "relative_humidity_2m",
+    "dew_point_2m",
+    "apparent_temperature"
 ]
 
 ##########################################################################
 # Project Root Directory
 ##########################################################################
 
-TARGET_VARIABLE = "demand"
-FED_FEATURES = ["temperature_2m (°C)", "relative_humidity_2m (%)", "wind_speed_10m (km/h)", "hour_of_day", "day_of_week"]
+TARGET_VARIABLE = "Demand"
+FED_FEATURES = ["temperature_2m", "relative_humidity_2m", "wind_speed_10m", "hour_of_day", "day_of_week"]
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
 MODEL_NAME = "xgboost_model.pkl"
@@ -100,27 +114,34 @@ MODEL_NAME = "xgboost_model.pkl"
 ##########################################################################
 
 import os
-
-import dagshub
 import mlflow
 
-DAGSHUB_USER_NAME = os.getenv("DAGSHUB_USER_NAME", "Sangi2805")
-DAGSHUB_REPO_NAME = os.getenv("DAGSHUB_REPO_NAME", "Forecasting-Energy-Demand")
-DAGSHUB_TOKEN = os.getenv("DAGSHUB_TOKEN")
-MLFLOW_TRACKING_URI = os.getenv(
-    "MLFLOW_TRACKING_URI",
-    f"https://dagshub.com/{DAGSHUB_USER_NAME}/{DAGSHUB_REPO_NAME}.mlflow",
-)
+def configure_mlflow_tracking():
+    dagshub_user = os.getenv("DAGSHUB_USER_NAME")
+    dagshub_token = os.getenv("DAGSHUB_TOKEN")
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
 
-if DAGSHUB_TOKEN:
-    os.environ["DAGSHUB_USER_TOKEN"] = DAGSHUB_TOKEN
-    os.environ["MLFLOW_TRACKING_USERNAME"] = DAGSHUB_USER_NAME
-    os.environ["MLFLOW_TRACKING_PASSWORD"] = DAGSHUB_TOKEN
+    missing_vars = [
+        name
+        for name, value in {
+            "DAGSHUB_USER_NAME": dagshub_user,
+            "DAGSHUB_TOKEN": dagshub_token,
+            "MLFLOW_TRACKING_URI": tracking_uri
+        }.items()
+        if not value
+    ]
 
-dagshub.init(
-    repo_owner=DAGSHUB_USER_NAME,
-    repo_name=DAGSHUB_REPO_NAME,
-    mlflow=True,
-)
-mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    if missing_vars:
+        raise RuntimeError(
+            "Missing DagsHub MLflow configuration: "
+            f"{', '.join(missing_vars)}. "
+            "Local MLflow tracking is disabled."
+        )
+
+    os.environ.setdefault("MLFLOW_TRACKING_USERNAME", dagshub_user)
+    os.environ.setdefault("MLFLOW_TRACKING_PASSWORD", dagshub_token)
+    mlflow.set_tracking_uri(tracking_uri)
+    print(f"[OK] MLflow configured for DagsHub at {tracking_uri}")
+
+    return tracking_uri
 

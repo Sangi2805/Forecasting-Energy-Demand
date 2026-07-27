@@ -1,15 +1,23 @@
 import pandas as pd
 from streamlit import columns
 import config as cfg
+import numpy as np
+
 import data_collection as dc
 import os
+import re
 
 
 def read_elec_demand_data():
-    return dc.read_csv_file(cfg.RAW_DATA_DIR / "electricity_demand_data.csv", cols=cfg.ELEC_DEMAND_FEATURES)   # all columns are needed for electricity demand data
+    df = dc.read_csv_file(cfg.RAW_DATA_DIR / "electricity_demand_data.csv")
+    df = remove_units_from_column_names(df)
+    return df[cfg.ELEC_DEMAND_FEATURES]   # all columns are needed for electricity demand data
     
 def read_weather_data():
-    return dc.read_csv_file(cfg.RAW_DATA_DIR / "weather_data.csv", cols=cfg.SEL_WEATHER_FEATURES)   # all columns are needed for weather data
+    df = dc.read_csv_file(cfg.RAW_DATA_DIR / "weather_data.csv")
+    df = remove_units_from_column_names(df)
+    return df[cfg.SEL_WEATHER_FEATURES]   # all columns are needed for weather data
+    #return dc.read_csv_file(cfg.RAW_DATA_DIR / "weather_data.csv", cols=cfg.SEL_WEATHER_FEATURES)   # all columns are needed for weather data
 
 def read_GDP_data():
     return dc.read_csv_file(cfg.RAW_DATA_DIR / "gdp_data.csv")   # all columns are needed for GDP data
@@ -33,7 +41,7 @@ def add_date_features(df, datetime_col):
     df["month"] = df[datetime_col].dt.month
     return df
 
-def standardize_date_time_columns(elec_demand_df, weather_df, gdp_df, population_df, holiday_df):
+def add_date_time_standardized_columns(elec_demand_df, weather_df, gdp_df, population_df, holiday_df):
     elec_demand_df["Local time"] = pd.to_datetime(
         elec_demand_df["Local time"],
         format="%m/%d/%Y %H:%M"
@@ -52,15 +60,78 @@ def standardize_date_time_columns(elec_demand_df, weather_df, gdp_df, population
     )
     holiday_df["date"] = pd.to_datetime(holiday_df["date"])
 
-    add_date_features(elec_demand_df, "Local time")
-    add_date_features(weather_df, "time")
-    add_date_features(gdp_df, "observation_date")
-    add_date_features(population_df, "observation_date")
+    #add_date_features(elec_demand_df, "Local time")
+    elec_demand_df["date"] = elec_demand_df["Local time"].dt.normalize()
+    elec_demand_df["day_name"] = elec_demand_df["date"].dt.day_name()
+    elec_demand_df["month"] = elec_demand_df["Local time"].dt.month
+    elec_demand_df["month_name"] = elec_demand_df["Local time"].dt.month_name()
+    elec_demand_df["year"] = elec_demand_df["Local time"].dt.year
 
-    holiday_df["year"] = holiday_df["date"].dt.year
-    holiday_df["month"] = holiday_df["date"].dt.month
 
+    #add_date_features(weather_df, "time")
+
+    #add_date_features(gdp_df, "observation_date")
+    gdp_df["year"] = gdp_df["observation_date"].dt.year
+    
+    #add_date_features(population_df, "observation_date")
+    population_df["year"] = population_df["observation_date"].dt.year
+
+    #add_date_features(holiday_df, "date")
+    
     return elec_demand_df, weather_df, gdp_df, population_df, holiday_df
+
+def Convert_Demand_To_Numeric(df):
+    # Remove commas and convert to numeric
+    df['Demand'] = pd.to_numeric(
+        df['Demand'].astype(str).str.replace(',', '', regex=False)
+    )
+    return df
+
+def encode_holiday_to_numeric(series):
+    # Any non-empty holiday label is encoded as 1, otherwise 0.
+    cleaned = series.fillna(0).astype(str).str.strip().str.lower()
+    return (~cleaned.isin(["0", "", "none", "nan", "null"])).astype(int)
+
+
+def add_hour_weekday_month_encoded_features(df_input):
+    df_output = df_input.copy()
+
+    hour_series = pd.to_numeric(df_output["Hour"], errors="coerce")
+    month_series = pd.to_numeric(df_output["month"], errors="coerce")
+
+    if "Local time" in df_output.columns:
+        local_time_dt = pd.to_datetime(df_output["Local time"], errors="coerce")
+        weekday_series = local_time_dt.dt.dayofweek
+    elif "day_of_week" in df_output.columns:
+        day_map = {
+            "monday": 0,
+            "tuesday": 1,
+            "wednesday": 2,
+            "thursday": 3,
+            "friday": 4,
+            "saturday": 5,
+            "sunday": 6
+        }
+        weekday_series = (
+            df_output["day_of_week"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .map(day_map)
+        )
+    else:
+        raise KeyError("Missing both 'Local time' and 'day_of_week' columns.")
+
+    df_output["hour_sin"] = np.sin(2 * np.pi * hour_series / 24.0)
+    df_output["hour_cos"] = np.cos(2 * np.pi * hour_series / 24.0)
+
+    df_output["weekday_sin"] = np.sin(2 * np.pi * weekday_series / 7.0)
+    df_output["weekday_cos"] = np.cos(2 * np.pi * weekday_series / 7.0)
+
+    df_output["month_sin"] = np.sin(2 * np.pi * (month_series - 1) / 12.0)
+    df_output["month_cos"] = np.cos(2 * np.pi * (month_series - 1) / 12.0)
+
+    return df_output
 
 def add_previous_day_avg_weather_features(merged_df):
     daily_weather_avg_df = (
@@ -93,6 +164,14 @@ def add_previous_day_avg_weather_features(merged_df):
 
     return merged_df
 
+def remove_units_from_column_names(df):
+    df = df.copy()
+    df.rename(
+        columns=lambda col: re.sub(r"\s*\([^)]*\)", "", col).strip(),
+        inplace=True
+    )
+    return df
+
 #process data
 
 def process_data():
@@ -105,35 +184,74 @@ def process_data():
     holiday_df = read_holiday_data( *get_date_range_from_elec_demand(elec_demand_df))
 
     #step 2: convert date columns to datetime format and create date features
-    elec_demand_df, weather_df, gdp_df, population_df, holiday_df = standardize_date_time_columns(
+    elec_demand_df, weather_df, gdp_df, population_df, holiday_df = add_date_time_standardized_columns(
         elec_demand_df,
         weather_df,
         gdp_df,
         population_df,
         holiday_df
     )
+    # Convert 'Demand' to numeric
+    elec_demand_df = Convert_Demand_To_Numeric(elec_demand_df)
+    # step 4: create lag features
+    elec_demand_df["demand_lag_1h"] = elec_demand_df["Demand"].shift(1)
+    elec_demand_df["demand_lag_2h"] = elec_demand_df["Demand"].shift(2)
+
+    elec_demand_df["demand_lag_3h"] = elec_demand_df["Demand"].shift(3)
+    elec_demand_df["demand_lag_4h"] = elec_demand_df["Demand"].shift(4)
+
+    elec_demand_df["demand_lag_24h"] = elec_demand_df["Demand"].shift(24)
+    elec_demand_df["demand_lag_48h"] = elec_demand_df["Demand"].shift(48)
+    elec_demand_df["demand_lag_72h"] = elec_demand_df["Demand"].shift(72)
+
+    elec_demand_df["demand_rolling_24h_mean"] = elec_demand_df["Demand"].shift(1).rolling(24).mean()
+    elec_demand_df["demand_rolling_168h_mean"] = elec_demand_df["Demand"].shift(1).rolling(168).mean()  
    
-    # step 3: Merge datasets 
+    # Std
+    elec_demand_df["demand_std_24h"] = elec_demand_df["Demand"].rolling(24).std()
+    elec_demand_df["demand_std_168h"] = elec_demand_df["Demand"].rolling(168).std()
 
-    weather_merge_df = weather_df.drop(columns=["date", "year", "month"])
-    gdp_merge_df = gdp_df.drop(columns=["observation_date", "date", "month"])
-    population_merge_df = population_df.drop(columns=["observation_date", "date", "month"])
-    holiday_merge_df = holiday_df.drop(columns=["year", "month"])
+    # Min
+    elec_demand_df["demand_min_24h"] = elec_demand_df["Demand"].rolling(24).min()
 
-    merged_df = pd.merge(elec_demand_df, weather_merge_df, left_on='Local time', right_on='time', how='left')
-    merged_df = pd.merge(merged_df, gdp_merge_df, left_on='year', right_on='year', how='left')
-    merged_df = pd.merge(merged_df, population_merge_df, left_on='year', right_on='year', how='left')
-    merged_df = pd.merge(merged_df, holiday_merge_df, left_on='date', right_on='date', how='left')
+    # Max
+    elec_demand_df["demand_max_24h"] = elec_demand_df["Demand"].rolling(24).max()
+
+
+    ########################
+    # Encode weekday to numeric
+    merged_df = pd.merge(elec_demand_df, holiday_df, left_on='date', right_on='date', how='left')
+
+
+    merged_df = add_hour_weekday_month_encoded_features(merged_df)
     
-    merged_df["day_of_week"] = merged_df["date"].dt.day_name()
-    merged_df = add_previous_day_avg_weather_features(merged_df)
+    merged_df["holiday_encoded"] = encode_holiday_to_numeric(merged_df["holiday"])
+
+    merged_df = pd.merge(merged_df, weather_df, left_on='Local time', right_on='time', how='left')
+    merged_df = pd.merge(merged_df, gdp_df, left_on='year', right_on='year', how='left')
+    merged_df = pd.merge(merged_df, population_df, left_on='year', right_on='year', how='left')
+       
+
+    #merged_df = add_previous_day_avg_weather_features(merged_df)
+
+    merged_df = remove_units_from_column_names(merged_df)
     
-    # step 4: zero imputation for missing values in merged_df
+    # Convert 'Demand' to numeric
+    merged_df = Convert_Demand_To_Numeric(merged_df)
+
+    #drop unnecessary columns
+    merged_df.drop(columns=["time", "observation_date_x", "observation_date_y"], inplace=True)
+
+    
+
+
+    # step 5 zero imputation for missing values in merged_df
     merged_df.fillna(0, inplace=True)
-      
-   
 
+      
     return merged_df
+
+
 
 def test():
     #dc.read_col_names(cfg.RAW_DATA_DIR / "weather_data.csv")
