@@ -19,3 +19,6 @@ lightning_logs*/
 *.ckpt
 Untitled*
 mlflow.db
+
+# keep dashboard result CSVs
+!reports/*.csv
