@@ -848,241 +848,241 @@ if SHOW_LIVE_TAB:
     # ---------------------------------------------------------------------------
     # Forecasting — 24..120h horizon (selecting Nh includes 24h..Nh)
     # ---------------------------------------------------------------------------
-    with tab_fc:
-        st.markdown("#### Day-ahead forecasting")
-        origin = forecast_origin(zonal)
+with tab_fc:
+    st.markdown("#### Day-ahead forecasting")
+    origin = forecast_origin(zonal)
 
-        scope_options = ["Statewide"] + ZONE_COLS
-        c_horizon, c_scope = st.columns([2, 1])
-        with c_horizon:
-            day = st.radio(
-                "Forecast horizon",
-                options=[1, 2, 3, 4, 5],
-                format_func=lambda d: f"{d * 24} hours",
-                horizontal=True,
-                index=0,
-                help="Selecting N hours shows the full window from 24 hours through N hours as one continuous series.",
+    scope_options = ["Statewide"] + ZONE_COLS
+    c_horizon, c_scope = st.columns([2, 1])
+    with c_horizon:
+        day = st.radio(
+            "Forecast horizon",
+            options=[1, 2, 3, 4, 5],
+            format_func=lambda d: f"{d * 24} hours",
+            horizontal=True,
+            index=0,
+            help="Selecting N hours shows the full window from 24 hours through N hours as one continuous series.",
+        )
+    with c_scope:
+        forecast_scope = st.selectbox(
+            "Zone",
+            options=scope_options,
+            index=0,
+            format_func=lambda z: (
+                "Statewide"
+                if z == "Statewide"
+                else f"{ZONE_META[z]['code']} — {ZONE_META[z]['label']}"
+            ),
+            help="Statewide = NYISO total. Otherwise metrics and chart use the selected load zone.",
+        )
+
+    if _REAL is not None and not _REAL.empty:
+        if "sel_issue" not in st.session_state:
+            st.session_state["sel_issue"] = _SORTED_ISSUES[-1]
+        c_date, _pad = st.columns([1, 3])
+        with c_date:
+            st.date_input(
+                "Forecast date",
+                min_value=_SORTED_ISSUES[0],
+                max_value=_SORTED_ISSUES[-1],
+                key="sel_issue",
+                help=f"{len(_SORTED_ISSUES)} forecast dates available, "
+                     f"{_SORTED_ISSUES[0]} to {_SORTED_ISSUES[-1]}.",
             )
-        with c_scope:
-            forecast_scope = st.selectbox(
-                "Zone",
-                options=scope_options,
-                index=0,
-                format_func=lambda z: (
-                    "Statewide"
-                    if z == "Statewide"
-                    else f"{ZONE_META[z]['code']} — {ZONE_META[z]['label']}"
-                ),
-                help="Statewide = NYISO total. Otherwise metrics and chart use the selected load zone.",
-            )
+        if st.session_state["sel_issue"] not in _ISSUE_SET:
+            st.caption("No forecast was issued on that date — showing the nearest earlier one.")
 
-        if _REAL is not None and not _REAL.empty:
-            if "sel_issue" not in st.session_state:
-                st.session_state["sel_issue"] = _SORTED_ISSUES[-1]
-            c_date, _pad = st.columns([1, 3])
-            with c_date:
-                st.date_input(
-                    "Forecast date",
-                    min_value=_SORTED_ISSUES[0],
-                    max_value=_SORTED_ISSUES[-1],
-                    key="sel_issue",
-                    help=f"{len(_SORTED_ISSUES)} forecast dates available, "
-                         f"{_SORTED_ISSUES[0]} to {_SORTED_ISSUES[-1]}.",
-                )
-            if st.session_state["sel_issue"] not in _ISSUE_SET:
-                st.caption("No forecast was issued on that date — showing the nearest earlier one.")
+    included_days = list(range(1, day + 1))
+    horizon_hours = day * 24
+    actual_col, pred_col, scope_label = forecast_scope_columns(forecast_scope)
 
-        included_days = list(range(1, day + 1))
-        horizon_hours = day * 24
-        actual_col, pred_col, scope_label = forecast_scope_columns(forecast_scope)
+    frames = []
+    for d in included_days:
+        target = day_mape.get(d, 3.5)
+        part = mock_day_predictions(zonal, d, target_mape=target)
+        if part.empty:
+            st.warning(f"Not enough archive history for {d * 24} hours.")
+            st.stop()
+        part = part.copy()
+        part["day"] = d
+        frames.append(part)
 
-        frames = []
-        for d in included_days:
-            target = day_mape.get(d, 3.5)
-            part = mock_day_predictions(zonal, d, target_mape=target)
-            if part.empty:
-                st.warning(f"Not enough archive history for {d * 24} hours.")
-                st.stop()
-            part = part.copy()
-            part["day"] = d
-            frames.append(part)
+    day_df = pd.concat(frames).sort_index()
+    day_df["actual"] = day_df[actual_col]
+    day_df["predicted"] = day_df[pred_col]
 
-        day_df = pd.concat(frames).sort_index()
-        day_df["actual"] = day_df[actual_col]
-        day_df["predicted"] = day_df[pred_col]
+    window_start = day_df.index.min()
+    window_end = day_df.index.max()
+    days_label = f"{horizon_hours} hours"
+    target_note = ", ".join(f"{d * 24}h≈{day_mape.get(d, 3.5):.2f}%" for d in included_days)
+    st.caption(
+        f"**{days_label}** · **{scope_label}** · "
+        f"{window_start.strftime('%Y-%m-%d %H:%M')} → "
+        f"{window_end.strftime('%Y-%m-%d %H:%M')} UTC · "
+        f"forecast origin {origin.strftime('%Y-%m-%d')} · "
+        "predictions from the trained zonal TFT model"
+    )
 
-        window_start = day_df.index.min()
-        window_end = day_df.index.max()
-        days_label = f"{horizon_hours} hours"
-        target_note = ", ".join(f"{d * 24}h≈{day_mape.get(d, 3.5):.2f}%" for d in included_days)
+    summary = day_summary(day_df, actual_col="actual", pred_col="predicted")
+    forecast_peak = float(day_df["predicted"].max())
+    forecast_min = float(day_df["predicted"].min())
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Actual (avg)", f"{summary['actual_mw']:,.0f} MW")
+    m2.metric("Predicted (avg)", f"{summary['predicted_mw']:,.0f} MW")
+    m3.metric("Forecast Peak", f"{forecast_peak:,.0f} MW")
+    m4.metric("Forecast Min", f"{forecast_min:,.0f} MW")
+    m5.metric("Error %", f"{summary['error_pct']:.2f}%")
+    _ov = real_overall_mape() if (_REAL is not None and not _REAL.empty) else {}
+    if _ov and forecast_scope == "Statewide":
         st.caption(
-            f"**{days_label}** · **{scope_label}** · "
-            f"{window_start.strftime('%Y-%m-%d %H:%M')} → "
-            f"{window_end.strftime('%Y-%m-%d %H:%M')} UTC · "
-            f"forecast origin {origin.strftime('%Y-%m-%d')} · "
-            "predictions from the trained zonal TFT model"
+            f"This forecast date: **{summary['error_pct']:.2f}%**  ·  "
+            f"model average across all {len(_SORTED_ISSUES)} forecast dates "
+            f"at this horizon: **{_ov.get(day, float('nan')):.2f}%**"
         )
 
-        summary = day_summary(day_df, actual_col="actual", pred_col="predicted")
-        forecast_peak = float(day_df["predicted"].max())
-        forecast_min = float(day_df["predicted"].min())
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Actual (avg)", f"{summary['actual_mw']:,.0f} MW")
-        m2.metric("Predicted (avg)", f"{summary['predicted_mw']:,.0f} MW")
-        m3.metric("Forecast Peak", f"{forecast_peak:,.0f} MW")
-        m4.metric("Forecast Min", f"{forecast_min:,.0f} MW")
-        m5.metric("Error %", f"{summary['error_pct']:.2f}%")
-        _ov = real_overall_mape() if (_REAL is not None and not _REAL.empty) else {}
-        if _ov and forecast_scope == "Statewide":
-            st.caption(
-                f"This forecast date: **{summary['error_pct']:.2f}%**  ·  "
-                f"model average across all {len(_SORTED_ISSUES)} forecast dates "
-                f"at this horizon: **{_ov.get(day, float('nan')):.2f}%**"
-            )
 
-
-        hourly = pd.DataFrame(
-            {
-                "Time (UTC)": day_df.index.strftime("%Y-%m-%d %H:%M"),
-                "Forecast (MW)": day_df["predicted"].round(1),
-                "Actual (MW)": day_df["actual"].round(1),
-                "Error (MW)": (day_df["predicted"] - day_df["actual"]).round(1),
-                "Error (%)": (
-                    100.0
-                    * (day_df["predicted"] - day_df["actual"]).abs()
-                    / day_df["actual"].clip(lower=1)
-                ).round(2),
-            }
-        )
-
-        # --- Chart + hour-by-hour table side by side ---
-        chart_col, table_col = st.columns([1.15, 1], gap="large")
-        panel_height = 460
-
-        with chart_col:
-            st.markdown(f"##### {scope_label} demand — actual vs predicted")
-            fig_fc = go.Figure()
-            fig_fc.add_trace(
-                go.Scatter(
-                    x=day_df.index,
-                    y=day_df["actual"],
-                    name="Actual",
-                    mode="lines",
-                    line=dict(color=COLORS["actual"], width=2.4),
-                )
-            )
-            fig_fc.add_trace(
-                go.Scatter(
-                    x=day_df.index,
-                    y=day_df["predicted"],
-                    name="Predicted",
-                    mode="lines",
-                    line=dict(color=COLORS["forecast"], width=2.4, dash="dash"),
-                )
-            )
-            if len(included_days) > 1:
-                for d in included_days[1:]:
-                    boundary = day_df.loc[day_df["day"] == d].index.min()
-                    if pd.notna(boundary):
-                        fig_fc.add_vline(
-                            x=boundary.to_pydatetime(),
-                            line_width=1,
-                            line_dash="dot",
-                            line_color=COLORS["muted"],
-                            annotation_text=f"{d * 24}h",
-                            annotation_position="top left",
-                            annotation_font_color=COLORS["muted"],
-                        )
-            fig_fc.update_layout(
-                **{k: v for k, v in PLOTLY_LAYOUT.items() if k != "margin"},
-                height=panel_height,
-                yaxis_title="Demand (MW)",
-                xaxis_title="Time (UTC)",
-                hovermode="x unified",
-                margin=dict(l=48, r=16, t=24, b=40),
-            )
-            st.plotly_chart(fig_fc, use_container_width=True)
-
-        with table_col:
-            st.markdown(f"##### HOUR-BY-HOUR · {horizon_hours}h block")
-            st.caption(f"{scope_label} · forecast vs actual")
-            st.dataframe(
-                hourly,
-                use_container_width=True,
-                hide_index=True,
-                height=panel_height,
-                column_config={
-                    "Forecast (MW)": st.column_config.NumberColumn(format="%.1f"),
-                    "Actual (MW)": st.column_config.NumberColumn(format="%.1f"),
-                    "Error (MW)": st.column_config.NumberColumn(format="%+.1f"),
-                    "Error (%)": st.column_config.NumberColumn(format="%.2f"),
-                },
-            )
-
-        # --- Map: consumption for included days ---
-        zone_df = zone_day_consumption(day_df)
-        map_df = zone_df if forecast_scope == "Statewide" else zone_df[zone_df["zone"] == forecast_scope]
-        st.markdown("##### Zone demand on this forecast horizon")
-        st.caption(
-            f"Map is tied to the selected **{horizon_hours} hours** window"
-            + (
-                " (all zones)."
-                if forecast_scope == "Statewide"
-                else f" · highlighting **{scope_label}**."
-            )
-            + " Bubble size = predicted energy (MWh), color = forecast error (%)."
-        )
-
-        scatter_fn = getattr(px, "scatter_map", None) or px.scatter_mapbox
-        fig_zmap = scatter_fn(
-            map_df,
-            lat="lat",
-            lon="lon",
-            size="predicted_mwh",
-            color="error_pct",
-            hover_name="label",
-            hover_data={
-                "code": True,
-                "actual_mwh": ":.0f",
-                "predicted_mwh": ":.0f",
-                "error_pct": ":.2f",
-                "share_pct": ":.1f",
-                "lat": False,
-                "lon": False,
-            },
-            color_continuous_scale=["#1a9b8e", "#e8a838", "#d64545"],
-            size_max=52,
-            zoom=5.6 if forecast_scope == "Statewide" else 6.4,
-            height=480,
-        )
-        layout_extra = {
-            **{k: v for k, v in PLOTLY_LAYOUT.items() if k not in ("xaxis", "yaxis")},
-            "coloraxis_colorbar": dict(title="Error %"),
-            "margin": dict(l=0, r=0, t=8, b=0),
+    hourly = pd.DataFrame(
+        {
+            "Time (UTC)": day_df.index.strftime("%Y-%m-%d %H:%M"),
+            "Forecast (MW)": day_df["predicted"].round(1),
+            "Actual (MW)": day_df["actual"].round(1),
+            "Error (MW)": (day_df["predicted"] - day_df["actual"]).round(1),
+            "Error (%)": (
+                100.0
+                * (day_df["predicted"] - day_df["actual"]).abs()
+                / day_df["actual"].clip(lower=1)
+            ).round(2),
         }
-        if scatter_fn is px.scatter_mapbox:
-            layout_extra["mapbox_style"] = "carto-darkmatter"
-        else:
-            layout_extra["map_style"] = "carto-darkmatter"
-        fig_zmap.update_layout(**layout_extra)
-        text_trace = getattr(go, "Scattermap", None) or go.Scattermapbox
-        fig_zmap.add_trace(
-            text_trace(
-                lat=map_df["lat"],
-                lon=map_df["lon"],
-                mode="text",
-                text=map_df["code"],
-                textfont=dict(size=12, color="white", family="IBM Plex Mono"),
-                hoverinfo="skip",
-                showlegend=False,
+    )
+
+    # --- Chart + hour-by-hour table side by side ---
+    chart_col, table_col = st.columns([1.15, 1], gap="large")
+    panel_height = 460
+
+    with chart_col:
+        st.markdown(f"##### {scope_label} demand — actual vs predicted")
+        fig_fc = go.Figure()
+        fig_fc.add_trace(
+            go.Scatter(
+                x=day_df.index,
+                y=day_df["actual"],
+                name="Actual",
+                mode="lines",
+                line=dict(color=COLORS["actual"], width=2.4),
             )
         )
-        st.plotly_chart(fig_zmap, use_container_width=True)
+        fig_fc.add_trace(
+            go.Scatter(
+                x=day_df.index,
+                y=day_df["predicted"],
+                name="Predicted",
+                mode="lines",
+                line=dict(color=COLORS["forecast"], width=2.4, dash="dash"),
+            )
+        )
+        if len(included_days) > 1:
+            for d in included_days[1:]:
+                boundary = day_df.loc[day_df["day"] == d].index.min()
+                if pd.notna(boundary):
+                    fig_fc.add_vline(
+                        x=boundary.to_pydatetime(),
+                        line_width=1,
+                        line_dash="dot",
+                        line_color=COLORS["muted"],
+                        annotation_text=f"{d * 24}h",
+                        annotation_position="top left",
+                        annotation_font_color=COLORS["muted"],
+                    )
+        fig_fc.update_layout(
+            **{k: v for k, v in PLOTLY_LAYOUT.items() if k != "margin"},
+            height=panel_height,
+            yaxis_title="Demand (MW)",
+            xaxis_title="Time (UTC)",
+            hovermode="x unified",
+            margin=dict(l=48, r=16, t=24, b=40),
+        )
+        st.plotly_chart(fig_fc, use_container_width=True)
+
+    with table_col:
+        st.markdown(f"##### HOUR-BY-HOUR · {horizon_hours}h block")
+        st.caption(f"{scope_label} · forecast vs actual")
+        st.dataframe(
+            hourly,
+            use_container_width=True,
+            hide_index=True,
+            height=panel_height,
+            column_config={
+                "Forecast (MW)": st.column_config.NumberColumn(format="%.1f"),
+                "Actual (MW)": st.column_config.NumberColumn(format="%.1f"),
+                "Error (MW)": st.column_config.NumberColumn(format="%+.1f"),
+                "Error (%)": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
+
+    # --- Map: consumption for included days ---
+    zone_df = zone_day_consumption(day_df)
+    map_df = zone_df if forecast_scope == "Statewide" else zone_df[zone_df["zone"] == forecast_scope]
+    st.markdown("##### Zone demand on this forecast horizon")
+    st.caption(
+        f"Map is tied to the selected **{horizon_hours} hours** window"
+        + (
+            " (all zones)."
+            if forecast_scope == "Statewide"
+            else f" · highlighting **{scope_label}**."
+        )
+        + " Bubble size = predicted energy (MWh), color = forecast error (%)."
+    )
+
+    scatter_fn = getattr(px, "scatter_map", None) or px.scatter_mapbox
+    fig_zmap = scatter_fn(
+        map_df,
+        lat="lat",
+        lon="lon",
+        size="predicted_mwh",
+        color="error_pct",
+        hover_name="label",
+        hover_data={
+            "code": True,
+            "actual_mwh": ":.0f",
+            "predicted_mwh": ":.0f",
+            "error_pct": ":.2f",
+            "share_pct": ":.1f",
+            "lat": False,
+            "lon": False,
+        },
+        color_continuous_scale=["#1a9b8e", "#e8a838", "#d64545"],
+        size_max=52,
+        zoom=5.6 if forecast_scope == "Statewide" else 6.4,
+        height=480,
+    )
+    layout_extra = {
+        **{k: v for k, v in PLOTLY_LAYOUT.items() if k not in ("xaxis", "yaxis")},
+        "coloraxis_colorbar": dict(title="Error %"),
+        "margin": dict(l=0, r=0, t=8, b=0),
+    }
+    if scatter_fn is px.scatter_mapbox:
+        layout_extra["mapbox_style"] = "carto-darkmatter"
+    else:
+        layout_extra["map_style"] = "carto-darkmatter"
+    fig_zmap.update_layout(**layout_extra)
+    text_trace = getattr(go, "Scattermap", None) or go.Scattermapbox
+    fig_zmap.add_trace(
+        text_trace(
+            lat=map_df["lat"],
+            lon=map_df["lon"],
+            mode="text",
+            text=map_df["code"],
+            textfont=dict(size=12, color="white", family="IBM Plex Mono"),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    st.plotly_chart(fig_zmap, use_container_width=True)
 
 
-    # ---------------------------------------------------------------------------
-    # Track record — scored past day-ahead forecasts vs realized demand
-    # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Track record — scored past day-ahead forecasts vs realized demand
+# ---------------------------------------------------------------------------
 with tab_track:
     st.markdown("#### Track record")
     st.caption(
