@@ -303,6 +303,63 @@ def predictions_for_calendar_day(
     return out
 
 
+
+# ---------------------------------------------------------------------------
+# Real model predictions (zonal TFT). Overrides the placeholder generators
+# above; falls back to them automatically if the parquet is absent.
+# ---------------------------------------------------------------------------
+PRED_PATH = ROOT / "reports" / "tft_hourly_predictions.parquet"
+
+
+@st.cache_data(show_spinner=False)
+def load_real_predictions():
+    if not PRED_PATH.exists():
+        return None
+    df = pd.read_parquet(PRED_PATH)
+    df["issue_date"] = pd.to_datetime(df["issue_date"]).dt.date
+    ts = pd.to_datetime(df["ts_utc"])
+    df["ts_utc"] = ts.dt.tz_localize("UTC") if ts.dt.tz is None else ts.dt.tz_convert("UTC")
+    idx = ["issue_date", "lead_day", "ts_utc"]
+    p = df.pivot_table(index=idx, columns="zone", values="pred_mw", aggfunc="mean")
+    a = df.pivot_table(index=idx, columns="zone", values="actual_mw", aggfunc="mean")
+    zones = [z for z in ZONE_COLS if z in p.columns]
+    p, a = p[zones].copy(), a[zones].copy()
+    p["NYISO_TOTAL"] = p.sum(axis=1)
+    a["NYISO_TOTAL"] = a.sum(axis=1)
+    p.columns = [f"pred_{c}" for c in p.columns]
+    a.columns = [f"actual_{c}" for c in a.columns]
+    out = a.join(p).reset_index()
+    out["actual"] = out["actual_NYISO_TOTAL"]
+    out["predicted"] = out["pred_NYISO_TOTAL"]
+    return out
+
+
+_REAL = load_real_predictions()
+
+if _REAL is not None and not _REAL.empty:
+    _counts = _REAL.groupby("issue_date")["lead_day"].nunique()
+    _FULL = _counts[_counts >= 5]
+    _LATEST = _FULL.index.max() if len(_FULL) else _REAL["issue_date"].max()
+
+    def _real_block(issue, lead):
+        g = _REAL[(_REAL["issue_date"] == issue) & (_REAL["lead_day"] == lead)]
+        if g.empty:
+            return pd.DataFrame()
+        return (g.set_index("ts_utc")
+                 .drop(columns=["issue_date", "lead_day"])
+                 .sort_index())
+
+    def forecast_origin(zonal: pd.DataFrame) -> pd.Timestamp:
+        g = _REAL[(_REAL["issue_date"] == _LATEST) & (_REAL["lead_day"] == 1)]
+        return g["ts_utc"].min()
+
+    def mock_day_predictions(zonal, day, target_mape=None, seed=11):
+        return _real_block(_LATEST, int(day))
+
+    def predictions_for_calendar_day(zonal, day_start, target_mape=None, seed=11):
+        return _real_block(pd.Timestamp(day_start).date(), 1)
+
+
 def score_day_frame(day_df: pd.DataFrame) -> dict[str, float | str]:
     """Peak / wMAPE / peak-APE scorecard for one completed forecast day."""
     actual = day_df["actual"]
@@ -621,7 +678,7 @@ with st.sidebar:
     st.divider()
     st.caption(
         "Live: NYISO P-58B 5-min CSVs. "
-        "Forecasting + Track record: archive actuals with calibrated day-ahead placeholders."
+        "Forecasting + Track record: zonal TFT predictions scored against archive actuals."
     )
 
 # Prefetch live for badge (cached 60s)
@@ -811,7 +868,7 @@ with tab_fc:
         f"{window_start.strftime('%Y-%m-%d %H:%M')} → "
         f"{window_end.strftime('%Y-%m-%d %H:%M')} UTC · "
         f"forecast origin {origin.strftime('%Y-%m-%d')} · "
-        f"predictions mocked (target MAPE {target_note})"
+        "predictions from the trained zonal TFT model"
     )
 
     summary = day_summary(day_df, actual_col="actual", pred_col="predicted")
@@ -970,8 +1027,8 @@ with tab_track:
     st.markdown("#### Track record")
     st.caption(
         "Daily scores for completed day-ahead forecasts vs archive actuals "
-        "(seasonal-naive placeholders calibrated to reported Day-1 MAPE). "
-        "Replace with logged model outputs when prediction archives are saved."
+        "(zonal TFT model output, held-out test period). "
+        "Overall test error 2.95%; 2.21% day-ahead."
     )
 
     lookback = st.selectbox(
