@@ -360,6 +360,36 @@ if _REAL is not None and not _REAL.empty:
         return _real_block(pd.Timestamp(day_start).date(), 1)
 
 
+
+if _REAL is not None and not _REAL.empty:
+    _SORTED_ISSUES = sorted(_REAL["issue_date"].unique())
+    _ISSUE_SET = set(_SORTED_ISSUES)
+
+    def _selected_issue():
+        want = st.session_state.get("sel_issue", _LATEST)
+        if want in _ISSUE_SET:
+            return want
+        earlier = [d for d in _SORTED_ISSUES if d <= want]
+        return earlier[-1] if earlier else _SORTED_ISSUES[0]
+
+    def forecast_origin(zonal: pd.DataFrame) -> pd.Timestamp:
+        g = _REAL[(_REAL["issue_date"] == _selected_issue()) & (_REAL["lead_day"] == 1)]
+        return g["ts_utc"].min()
+
+    def mock_day_predictions(zonal, day, target_mape=None, seed=11):
+        return _real_block(_selected_issue(), int(day))
+
+    @st.cache_data(show_spinner=False)
+    def real_overall_mape():
+        out = {}
+        for n in range(1, 6):
+            g = _REAL[_REAL["lead_day"] <= n]
+            a = g["actual_NYISO_TOTAL"].to_numpy(dtype=float)
+            p = g["pred_NYISO_TOTAL"].to_numpy(dtype=float)
+            out[n] = float(np.mean(np.abs(a - p) / np.maximum(a, 1.0)) * 100)
+        return out
+
+
 def score_day_frame(day_df: pd.DataFrame) -> dict[str, float | str]:
     """Peak / wMAPE / peak-APE scorecard for one completed forecast day."""
     actual = day_df["actual"]
@@ -840,6 +870,22 @@ with tab_fc:
             help="Statewide = NYISO total. Otherwise metrics and chart use the selected load zone.",
         )
 
+    if _REAL is not None and not _REAL.empty:
+        if "sel_issue" not in st.session_state:
+            st.session_state["sel_issue"] = _SORTED_ISSUES[-1]
+        c_date, _pad = st.columns([1, 3])
+        with c_date:
+            st.date_input(
+                "Forecast date",
+                min_value=_SORTED_ISSUES[0],
+                max_value=_SORTED_ISSUES[-1],
+                key="sel_issue",
+                help=f"{len(_SORTED_ISSUES)} forecast dates available, "
+                     f"{_SORTED_ISSUES[0]} to {_SORTED_ISSUES[-1]}.",
+            )
+        if st.session_state["sel_issue"] not in _ISSUE_SET:
+            st.caption("No forecast was issued on that date — showing the nearest earlier one.")
+
     included_days = list(range(1, day + 1))
     horizon_hours = day * 24
     actual_col, pred_col, scope_label = forecast_scope_columns(forecast_scope)
@@ -880,6 +926,14 @@ with tab_fc:
     m3.metric("Forecast Peak", f"{forecast_peak:,.0f} MW")
     m4.metric("Forecast Min", f"{forecast_min:,.0f} MW")
     m5.metric("Error %", f"{summary['error_pct']:.2f}%")
+    _ov = real_overall_mape() if (_REAL is not None and not _REAL.empty) else {}
+    if _ov and forecast_scope == "Statewide":
+        st.caption(
+            f"This forecast date: **{summary['error_pct']:.2f}%**  ·  "
+            f"model average across all {len(_SORTED_ISSUES)} forecast dates "
+            f"at this horizon: **{_ov.get(day, float('nan')):.2f}%**"
+        )
+
 
     hourly = pd.DataFrame(
         {
