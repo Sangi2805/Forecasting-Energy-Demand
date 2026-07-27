@@ -1112,7 +1112,7 @@ with tab_track:
 
         k1, k2, k3, k4, k5 = st.columns(5)
         k1.metric("Avg error", f"{avg_wmape:.2f}%")
-        k2.metric("Avg peak APE", f"{avg_peak:.2f}%")
+        k2.metric("Avg peak-hour error", f"{avg_peak:.2f}%")
         k3.metric("Days under 3% error", f"{hit_rate:.0f}%")
         k4.metric("Best day", f"{best['date']}", delta=f"{best['wmape']:.2f}% error")
         k5.metric("Worst day", f"{worst['date']}", delta=f"{worst['wmape']:.2f}% error", delta_color="inverse")
@@ -1166,7 +1166,7 @@ with tab_track:
                 sc = score_day_frame(replay)
                 r1, r2, r3 = st.columns(3)
                 r1.metric("Error", f"{sc['wmape']:.2f}%")
-                r2.metric("Peak APE", f"{sc['peak_ape']:.2f}%")
+                r2.metric("Peak-hour error", f"{sc['peak_ape']:.2f}%")
                 r3.metric(
                     "Peaks (P / A)",
                     f"{sc['predicted_peak_mw']/1000:.1f} / {sc['actual_peak_mw']/1000:.1f} GW",
@@ -1218,7 +1218,7 @@ with tab_track:
                 "date": "Date",
                 "predicted_peak_mw": "Pred peak (MW)",
                 "actual_peak_mw": "Actual peak (MW)",
-                "peak_ape": "Peak APE %",
+                "peak_ape": "Peak-hour error %",
                 "wmape": "Error %",
                 "mape": "MAPE %",
                 "accuracy": "Accuracy %",
@@ -1234,7 +1234,7 @@ with tab_track:
             column_config={
                 "Pred peak (MW)": st.column_config.NumberColumn(format="%,.0f"),
                 "Actual peak (MW)": st.column_config.NumberColumn(format="%,.0f"),
-                "Peak APE %": st.column_config.NumberColumn(format="%.2f"),
+                "Peak-hour error %": st.column_config.NumberColumn(format="%.2f"),
                 "Error %": st.column_config.NumberColumn(format="%.2f"),
                 "MAPE %": st.column_config.NumberColumn(format="%.2f"),
                 "Accuracy %": st.column_config.NumberColumn(format="%.2f"),
