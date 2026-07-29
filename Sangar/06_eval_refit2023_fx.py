@@ -9,7 +9,7 @@ import lightning.pytorch as pl
 from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
 from pytorch_forecasting.data import GroupNormalizer
 
-FOLDER    = "/opt/app-root/src/Forecasting-Energy-Demand/Sangar"
+FOLDER    = os.path.dirname(os.path.abspath(__file__))
 FEATURES  = os.path.join(FOLDER, "zonal_features_fx.parquet")
 LEADS     = os.path.join(FOLDER, "weather_leads_zonal.parquet")
 CKPT      = os.path.join(FOLDER, "checkpoints_zonal", "zonal_tft_refit2023_fx_best.ckpt")

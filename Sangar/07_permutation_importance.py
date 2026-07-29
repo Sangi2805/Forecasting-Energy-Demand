@@ -15,7 +15,7 @@ MODE   = sys.argv[1] if len(sys.argv) > 1 else "day1"
 LEADS  = [1] if MODE == "day1" else [1, 2, 3, 4, 5]
 STRIDE = 6 if MODE == "day1" else 15
 
-FOLDER   = "/opt/app-root/src/Forecasting-Energy-Demand/Sangar"
+FOLDER   = os.path.dirname(os.path.abspath(__file__))
 FEATURES = os.path.join(FOLDER, "zonal_features_fx.parquet")
 LEADFILE = os.path.join(FOLDER, "weather_leads_zonal.parquet")
 CKPT     = os.path.join(FOLDER, "checkpoints_zonal", "zonal_tft_refit2023_fx_best.ckpt")

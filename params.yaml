@@ -1,0 +1,33 @@
+# Hyperparameters and data splits for the reported zonal TFT
+# (Sangar/05_train_refit2023_fx.py, Sangar/06_eval_refit2023_fx.py)
+
+model:
+  name: zonal_tft_refit2023_fx
+  checkpoint: Sangar/checkpoints_zonal/zonal_tft_refit2023_fx_best.ckpt
+  hidden_size: 64
+  attention_head_size: 4
+  dropout: 0.1
+  hidden_continuous_size: 32
+  learning_rate: 0.0003
+  max_epochs: 2
+  batch_size: 128
+  seed: 42
+  encoder_length: 168   # hours
+  decoder_length: 120   # hours (5-day horizon)
+
+data:
+  features: Sangar/zonal_features_fx.parquet
+  weather_leads: Sangar/weather_leads_zonal.parquet
+  splits_dir: data/splits
+  train_start: "2015-07-01 04:00"
+  val_start: "2024-01-01 05:00"
+  test_start: "2024-01-23 12:00"
+
+reported_metrics:
+  overall_mape: 2.948
+  day_mape:
+    1: 2.206
+    2: 2.543
+    3: 2.859
+    4: 3.319
+    5: 3.814

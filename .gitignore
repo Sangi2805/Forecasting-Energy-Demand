@@ -5,6 +5,8 @@ models/**
 !data/**/.gitkeep
 !models/**/.gitkeep
 !data/**/*.dvc
+!data/splits/
+!data/splits/**
 .env
 __pycache__/
 *.pyc
@@ -20,5 +22,13 @@ lightning_logs*/
 Untitled*
 mlflow.db
 
-# keep dashboard result CSVs
+# keep report CSVs (must come after *.csv)
 !reports/*.csv
+!reports/**/*.csv
+
+# submission datasets (must come after ignore globs)
+!data/processed/*.csv
+!Sangar/*.parquet
+!Sangar/checkpoints_zonal/
+!Sangar/checkpoints_zonal/*.ckpt
+!Sangar/*.json

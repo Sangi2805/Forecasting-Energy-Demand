@@ -1,77 +1,29 @@
 # Forecasting Energy Demand
 
-This project builds a Streamlit dashboard for exploring energy demand forecasts and weather context for the NY region.
+NYISO zonal energy demand forecasting with a Temporal Fusion Transformer (TFT).
+Reported result: **2.95% overall MAPE** (2.21% day-ahead) on the held-out test period.
 
-## Project Structure
+## Quick start
 
-```text
-app/
-  streamlit_app.py      # Streamlit dashboard
-src/
-  data_collection.py
-  preprocessing.py
-  train.py
-  forecast.py
-  evaluate.py
-data/
-  raw/                  # Raw input data
-models/                 # Saved model artifacts
-reports/                # Reports and outputs
-requirements.txt
-params.yaml
-```
+See **[INSTRUCTIONS.md](INSTRUCTIONS.md)** for environment setup, datasets, training, and how to reproduce reported metrics.
 
-## Setup
-
-Activate the virtual environment first:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-Install project dependencies:
-
-```powershell
+```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+cd Sangar && python 06_eval_refit2023_fx.py
 ```
 
-Check important packages:
-
-```powershell
-python -m streamlit version
-python -c "import plotly.graph_objects as go; print('plotly ok')"
-python -c "import mlflow; print(mlflow.__version__)"
-```
-
-## Run the Streamlit App
-
-```powershell
-streamlit run app\streamlit_app.py
-```
-
-The app expects these input files:
+## Layout
 
 ```text
-data/raw/Region_NY.xlsx
-data/raw/weather.csv
+INSTRUCTIONS.md          # Setup + reproduction steps
+params.yaml              # Splits and hyperparameters
+requirements.txt
+Sangar/                  # TFT train/eval + zonal datasets + checkpoint
+data/splits/             # Explicit train / validation / test partitions
+data/processed/          # Classic daily feature CSVs
+app/streamlit_app.py     # Optional dashboard
+reports/                 # Predictions and figures
+src/                     # Shared utilities / earlier baselines
 ```
-
-## MLflow
-
-Start the MLflow UI:
-
-```powershell
-mlflow ui
-```
-
-Then open:
-
-```text
-http://127.0.0.1:5000
-```
-
-## Notes
-
-- Use the activated `.venv` before running commands.
-- If VS Code shows import errors, select `.venv\Scripts\python.exe` as the Python interpreter.
-- `openpyxl` is required because the app reads an Excel file with `pandas.read_excel()`.

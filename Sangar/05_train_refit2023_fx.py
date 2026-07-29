@@ -11,14 +11,15 @@ from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
 from pytorch_forecasting.data import GroupNormalizer
 from pytorch_forecasting.metrics import QuantileLoss
 
-FEATURES = Path("zonal_features_fx.parquet")
-CKPT_DIR = Path("checkpoints_zonal")
+ROOT = Path(__file__).resolve().parent
+FEATURES = ROOT / "zonal_features_fx.parquet"
+CKPT_DIR = ROOT / "checkpoints_zonal"
 TRAIN_START = "2015-07-01 04:00"
 VAL_START   = "2024-01-01 05:00"
 TEST_START  = "2024-01-23 12:00"
 ENCODER_LEN, DECODER_LEN = 168, 120
 BATCH = 128; MAX_EPOCHS = 2; SEED = 42
-NUM_WORKERS = 4
+NUM_WORKERS = 0  # portable default (set >0 on multi-core GPU hosts)
 
 WEATHER = ["temperature_2m","apparent_temperature","relative_humidity_2m",
            "wind_speed_10m","shortwave_radiation","cloud_cover","temp_vshape"]
@@ -66,10 +67,11 @@ def main():
         training_ds, df[df["time_idx"] < test_idx],
         min_prediction_idx=val_idx, stop_randomization=True)
 
-    train_dl = training_ds.to_dataloader(train=True, batch_size=BATCH,
-                                         num_workers=NUM_WORKERS, persistent_workers=True)
-    val_dl = validation_ds.to_dataloader(train=False, batch_size=BATCH,
-                                         num_workers=NUM_WORKERS, persistent_workers=True)
+    dl_kwargs = {"num_workers": NUM_WORKERS}
+    if NUM_WORKERS > 0:
+        dl_kwargs["persistent_workers"] = True
+    train_dl = training_ds.to_dataloader(train=True, batch_size=BATCH, **dl_kwargs)
+    val_dl = validation_ds.to_dataloader(train=False, batch_size=BATCH, **dl_kwargs)
 
     model = TemporalFusionTransformer.from_dataset(
         training_ds,

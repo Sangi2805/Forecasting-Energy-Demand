@@ -14,7 +14,7 @@ import lightning.pytorch as pl
 from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
 from pytorch_forecasting.data import GroupNormalizer
 
-ROOT      = Path("/opt/app-root/src/Forecasting-Energy-Demand/Sangar")
+ROOT      = Path(__file__).resolve().parent
 FEATURES  = ROOT / "zonal_features.parquet"
 LEADS     = ROOT / "weather_leads_zonal.parquet"
 CKPT      = ROOT / "checkpoints_zonal/zonal_tft_best.ckpt"

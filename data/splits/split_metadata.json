@@ -1,0 +1,31 @@
+{
+  "source": "Sangar/zonal_features_fx.parquet",
+  "timezone": "UTC",
+  "splits": {
+    "train": {
+      "path": "data/splits/train_zonal_fx.parquet",
+      "start": "2015-07-01 04:00",
+      "end_exclusive": "2024-01-01 05:00",
+      "rows": 819995,
+      "utc_min": "2015-07-01 04:00:00",
+      "utc_max": "2024-01-01 04:00:00"
+    },
+    "validation": {
+      "path": "data/splits/validation_zonal_fx.parquet",
+      "start": "2024-01-01 05:00",
+      "end_exclusive": "2024-01-23 12:00",
+      "rows": 5885,
+      "utc_min": "2024-01-01 05:00:00",
+      "utc_max": "2024-01-23 11:00:00"
+    },
+    "test": {
+      "path": "data/splits/test_zonal_fx.parquet",
+      "start": "2024-01-23 12:00",
+      "end_inclusive": "end of series",
+      "rows": 226908,
+      "utc_min": "2024-01-23 12:00:00",
+      "utc_max": "2026-05-31 23:00:00"
+    }
+  },
+  "notes": "TFT training/eval scripts load the full Sangar/zonal_features_fx.parquet and apply these same date cutoffs. Encoder lookback (168h) crosses split boundaries, so the full table is required to re-run training."
+}
