@@ -14,6 +14,8 @@ import lightning.pytorch as pl
 from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
 from pytorch_forecasting.data import GroupNormalizer
 
+from ckpt_utils import load_tft_checkpoint, pick_device
+
 ROOT      = Path(__file__).resolve().parent
 FEATURES  = ROOT / "zonal_features.parquet"
 LEADS     = ROOT / "weather_leads_zonal.parquet"
@@ -180,7 +182,8 @@ def main():
 
         test_start_idx = int(df.loc[df["utc"] >= TEST_START, "time_idx"].min())
         training_ds = build_training_ds(df)
-        model = TemporalFusionTransformer.load_from_checkpoint(str(CKPT))
+        device = pick_device()
+        model = load_tft_checkpoint(str(CKPT), device=device)
 
         one = df[df["zone"] == df["zone"].iloc[0]]
         month_arr = np.full(int(df["time_idx"].max()) + DECODER_LEN + 2, -1)

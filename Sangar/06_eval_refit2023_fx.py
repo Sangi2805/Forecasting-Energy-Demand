@@ -9,6 +9,8 @@ import lightning.pytorch as pl
 from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
 from pytorch_forecasting.data import GroupNormalizer
 
+from ckpt_utils import load_tft_checkpoint, pick_device
+
 FOLDER    = os.path.dirname(os.path.abspath(__file__))
 FEATURES  = os.path.join(FOLDER, "zonal_features_fx.parquet")
 LEADS     = os.path.join(FOLDER, "weather_leads_zonal.parquet")
@@ -107,7 +109,7 @@ def predict_one_zone(model, training_ds, df_zone, tsi, device, debug=False):
 
 def main():
     pl.seed_everything(SEED)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = pick_device()
     df=load_base()
     missing=[c for c in KNOWN_REALS if c not in df.columns]
     if missing: raise SystemExit("missing columns: " + str(missing))
@@ -117,7 +119,7 @@ def main():
 
     tsi=int(df.loc[df["utc"]>=TEST_START,"time_idx"].min())
     training_ds=build_training_ds(df)
-    model=TemporalFusionTransformer.load_from_checkpoint(CKPT).to(device).eval()
+    model = load_tft_checkpoint(CKPT, device=device)
 
     one=df[df["zone"]==df["zone"].iloc[0]]
     month_arr=np.full(int(df["time_idx"].max())+DECODER_LEN+2,-1)

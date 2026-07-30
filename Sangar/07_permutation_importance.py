@@ -11,6 +11,8 @@ import lightning.pytorch as pl
 from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
 from pytorch_forecasting.data import GroupNormalizer
 
+from ckpt_utils import load_tft_checkpoint, pick_device
+
 MODE   = sys.argv[1] if len(sys.argv) > 1 else "day1"
 LEADS  = [1] if MODE == "day1" else [1, 2, 3, 4, 5]
 STRIDE = 6 if MODE == "day1" else 15
@@ -154,14 +156,14 @@ def score(model, tds, df_d, tsi, device, zones, lead):
 
 def main():
     pl.seed_everything(SEED)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = pick_device()
     df = load_base()
     leads = pd.read_parquet(LEADFILE); leads.index = pd.to_datetime(leads.index)
     if getattr(leads.index,"tz",None) is not None: leads.index = leads.index.tz_localize(None)
 
     tsi = int(df.loc[df["utc"]>=TEST_START,"time_idx"].min())
     tds = build_training_ds(df)
-    model = TemporalFusionTransformer.load_from_checkpoint(CKPT).to(device).eval()
+    model = load_tft_checkpoint(CKPT, device=device)
     df = df[df["time_idx"] >= tsi-ENCODER_LEN-1].copy()
     zones = sorted(df["zone"].unique())
 

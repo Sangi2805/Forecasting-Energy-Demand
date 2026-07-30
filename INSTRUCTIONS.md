@@ -9,6 +9,7 @@ Instructions to set up the environment, run training, and reproduce the reported
 | `Sangar/05_train_refit2023_fx.py` | Train the reported zonal TFT |
 | `Sangar/06_eval_refit2023_fx.py` | Lead-matched evaluation (reproduces metrics) |
 | `Sangar/07_permutation_importance.py` | Optional feature importance |
+| `Sangar/ckpt_utils.py` | Portable CUDA→CPU/MPS checkpoint loader |
 | `Sangar/zonal_features_fx.parquet` | Full feature table used by train/eval |
 | `Sangar/weather_leads_zonal.parquet` | Lead-matched weather for leak-free eval |
 | `Sangar/checkpoints_zonal/zonal_tft_refit2023_fx_best.ckpt` | Trained model for reported metrics |
@@ -16,20 +17,26 @@ Instructions to set up the environment, run training, and reproduce the reported
 | `data/processed/` | Classic daily feature train/test CSVs (baselines) |
 | `app/streamlit_app.py` | Dashboard (optional) |
 | `params.yaml` | Split dates and model hyperparameters |
-| `requirements.txt` | Python dependencies |
+| `requirements.txt` | **Use this file** for TFT train/eval |
+
+> Note: `requirements-training.txt` is a legacy extras list (Streamlit/TF/xgboost/MLflow). It is **not** required for reproducing the reported TFT metrics.
 
 ## 1. Environment setup
 
-Python **3.10+** recommended. From the repository root:
+Python **3.10** recommended (3.10–3.12 should work). From the repository root:
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-GPU is optional. Evaluation runs on CPU; training is much faster on GPU/CUDA.
+Verified on macOS Apple Silicon with a fresh venv and `pip install -r requirements.txt` as written (no special PyTorch index required).
+
+GPU/CUDA is optional. Scripts auto-select `cuda`, Apple `mps`, or `cpu`. The included checkpoint was trained on CUDA; `ckpt_utils.py` remaps metric devices so load works on CPU/MPS hosts.
+
+**Runtime:** full lead-matched eval on CPU is typically **~1–2 hours**. GPU is much faster. Training from scratch is slow on CPU — prefer a GPU host for section 4.
 
 ## 2. Datasets (train / validation / test)
 
@@ -66,7 +73,12 @@ Expected output (approx.):
 - Overall MAPE ≈ **2.95%**
 - Metrics written to `Sangar/metrics_zonal_refit2023_fx.json`
 
-First run per lead caches `fx_lead{1..5}.npz` under `Sangar/` so restarts are faster.
+First run caches `Sangar/fx_lead{1..5}.npz` (large intermediate files; safe to delete). Restarts reuse them and finish much faster. For a clean cold-start timing check:
+
+```bash
+rm -f Sangar/fx_lead*.npz
+cd Sangar && python 06_eval_refit2023_fx.py
+```
 
 ## 4. Run training
 
