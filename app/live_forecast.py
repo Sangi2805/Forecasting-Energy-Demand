@@ -48,13 +48,8 @@ def _model_and_params():
     """Lazy singletons -- the checkpoint costs ~1s to load, so load it once."""
     global _MODEL, _PARAMS
     if _MODEL is None:
-        if not tc.CKPT.exists():
-            raise FileNotFoundError(f"checkpoint missing: {tc.CKPT}")
-        if not tc.DS_PARAMS.exists():
-            raise FileNotFoundError(
-                f"dataset params missing: {tc.DS_PARAMS} "
-                "(run scripts/validate_inference.py once to build it)"
-            )
+        # tc.resolve_artifact falls back to the Hub if either file is absent,
+        # so no existence check here -- it would defeat that fallback.
         _PARAMS = tc.load_ds_params()
         _MODEL = tc.load_model()
     return _MODEL, _PARAMS

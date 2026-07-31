@@ -28,6 +28,25 @@ LEADS = SANGAR / "weather_leads_zonal.parquet"
 CKPT = SANGAR / "zonal_tft_refit2023_fx_best.ckpt"
 DS_PARAMS = SANGAR / "tft_ds_params.pkl"
 
+# Both artifacts are committed to the repo, so nothing here normally reaches the
+# network. The Hub is a fallback for deployments that would rather clone a slim
+# repo and pull the 6 MB checkpoint at runtime; it is never required.
+HF_MODEL_REPO = "Shahriarrashid54/energyai-nyiso-tft"
+
+
+def resolve_artifact(local: Path) -> Path:
+    """Local file if present, otherwise the same filename off the Hub."""
+    if local.exists():
+        return local
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError as exc:
+        raise FileNotFoundError(
+            f"{local} is missing and huggingface_hub is not installed, so it "
+            f"cannot be fetched from {HF_MODEL_REPO}."
+        ) from exc
+    return Path(hf_hub_download(repo_id=HF_MODEL_REPO, filename=local.name))
+
 # ---------------------------------------------------------------------------
 # Model / dataset contract -- must match 05_train_refit2023_fx.py
 # ---------------------------------------------------------------------------
@@ -199,7 +218,7 @@ def save_ds_params(path: Path = DS_PARAMS) -> dict:
 
 
 def load_ds_params(path: Path = DS_PARAMS) -> dict:
-    with open(path, "rb") as fh:
+    with open(resolve_artifact(path), "rb") as fh:
         return pickle.load(fh)
 
 
@@ -235,7 +254,7 @@ def load_model(ckpt: Path = CKPT):
     torchmetrics.Metric._apply = _apply
     try:
         model = TemporalFusionTransformer.load_from_checkpoint(
-            str(ckpt), map_location="cpu"
+            str(resolve_artifact(ckpt)), map_location="cpu"
         )
     finally:
         torch.load = _orig_load

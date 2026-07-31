@@ -21,3 +21,6 @@ pyarrow==25.0.0
 streamlit==1.58.0
 plotly>=5.20
 requests>=2.31
+
+# Only used if the checkpoint is not present locally (slim-repo deployments).
+huggingface-hub>=0.25

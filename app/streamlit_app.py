@@ -762,11 +762,26 @@ with tab_live:
         _refresh_control()
 
     if live_df is None:
-        st.info(
-            "No live forecast cached yet. Press **Refresh forecast** to pull the "
-            "latest NYISO load and Open-Meteo forecast and run the model."
-        )
-        st.stop()
+        # Hosted containers have ephemeral disk, so the cache is empty on every
+        # cold start. Generating on first view means a visitor lands on a real
+        # forecast rather than an empty panel and a button. Subsequent sessions
+        # read the cache, and the 10-minute limit still governs manual refreshes.
+        try:
+            with st.spinner(
+                "First run on this container — pulling NYISO and Open-Meteo "
+                "feeds and running the model (about 30 seconds)…"
+            ):
+                lfc.run_forecast()
+            st.rerun()
+        except Exception as exc:
+            st.error(
+                f"Could not build the first forecast: {type(exc).__name__}: {exc}"
+            )
+            st.caption(
+                "Both upstream feeds are public and unauthenticated; this is "
+                "usually a transient outage. Try **Refresh forecast**."
+            )
+            st.stop()
 
     origin_utc = pd.Timestamp(live_meta["origin"])
     # Lead day N covers the Nth 24h block after the origin. The date picker and
