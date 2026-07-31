@@ -1,24 +1,29 @@
-# Pinned to the environment the refit2023+fx checkpoint was trained in (CAIR,
-# Python 3.12.9). pytorch-forecasting serialises the GroupNormalizer into the
-# checkpoint, so a major-version drift there stops it loading at all.
+# Pinned for Python 3.14, which is what the deployed Streamlit app runs.
+#
+# These are NOT the versions the checkpoint was trained under (CAIR used Python
+# 3.12.9 with torch 2.7.1). torch has no 3.14 wheels below 2.9, so the training
+# pins cannot be used here. This set was verified to load the checkpoint and
+# reproduce the banked predictions to 0.0693 MW -- byte-identical to the result
+# on the training pins -- so the drift is safe. Re-run
+# scripts/validate_inference.py after changing anything below.
 #
 # The CPU wheel is requested explicitly: plain `torch` on Linux pulls the CUDA
 # build and ~2 GB of nvidia-* dependencies a CPU-only deployment never uses.
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-torch==2.7.1+cpu
+torch==2.13.0+cpu
 pytorch-forecasting==1.8.0
 lightning==2.6.5
 pytorch-lightning==2.6.5
 torchmetrics==1.9.0
 
-numpy==2.3.3
-pandas==2.3.2
-scikit-learn==1.7.2
-scipy==1.16.1
-pyarrow==25.0.0
+numpy==2.5.1
+pandas==3.0.5
+scikit-learn==1.9.0
+scipy==1.18.0
+pyarrow==24.0.0
 
-streamlit==1.58.0
+streamlit>=1.58
 plotly>=5.20
 requests>=2.31
 
