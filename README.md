@@ -1,16 +1,3 @@
----
-title: EnergyAI NYISO Demand Forecasting
-emoji: ⚡
-colorFrom: green
-colorTo: blue
-sdk: streamlit
-sdk_version: 1.58.0
-app_file: app/streamlit_app.py
-python_version: "3.12"
-pinned: false
-license: mit
----
-
 # Forecasting New York Electricity Demand
 
 Hourly electricity demand forecasting for the eleven NYISO load zones, five days

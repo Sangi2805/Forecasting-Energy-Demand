@@ -31,7 +31,7 @@ DS_PARAMS = SANGAR / "tft_ds_params.pkl"
 # Both artifacts are committed to the repo, so nothing here normally reaches the
 # network. The Hub is a fallback for deployments that would rather clone a slim
 # repo and pull the 6 MB checkpoint at runtime; it is never required.
-HF_MODEL_REPO = "Shahriarrashid54/energyai-nyiso-tft"
+HF_MODEL_REPO = "shahriarrashid54/energyai-nyiso-tft"
 
 
 def resolve_artifact(local: Path) -> Path:
