@@ -1,5 +1,0 @@
-outs:
-- md5: e6ab962366f2f0239e98d1250ae9223e
-  size: 1709625
-  hash: md5
-  path: features_selected_train.csv

@@ -1,0 +1,40 @@
+Seed set to 42
+/opt/app-root/lib64/python3.12/site-packages/lightning/pytorch/utilities/parsing.py:213: Attribute 'loss' is an instance of `nn.Module` and is already saved during checkpointing. It is recommended to ignore them using `self.save_hyperparameters(ignore=['loss'])`.
+/opt/app-root/lib64/python3.12/site-packages/lightning/pytorch/utilities/parsing.py:213: Attribute 'logging_metrics' is an instance of `nn.Module` and is already saved during checkpointing. It is recommended to ignore them using `self.save_hyperparameters(ignore=['logging_metrics'])`.
+trimmed to 228767 rows, test_start_idx=75080, device=cuda
+
+=== Lead 1 ===
+  cached
+Day 1: 2.21%   (tuned 2.48%)  [saved]
+
+=== Lead 2 ===
+  cached
+Day 2: 2.54%   (tuned 2.89%)  [saved]
+
+=== Lead 3 ===
+  cached
+Day 3: 2.86%   (tuned 3.14%)  [saved]
+
+=== Lead 4 ===
+  cached
+Day 4: 3.32%   (tuned 3.52%)  [saved]
+
+=== Lead 5 ===
+  cached
+Day 5: 3.81%   (tuned 3.96%)  [saved]
+
+===== REFIT2023 + FX RESULTS =====
+Day 1: 2.21%   (tuned 2.48%)
+Day 2: 2.54%   (tuned 2.89%)
+Day 3: 2.86%   (tuned 3.14%)
+Day 4: 3.32%   (tuned 3.52%)
+Day 5: 3.81%   (tuned 3.96%)
+Overall: 2.95%   (tuned 3.20%, floor 3.37%, statewide 3.96%)
+
+Seasonal (tuned: Winter 3.35, Spring 3.37, Summer 3.60, Fall 2.35):
+  Winter: 2.93%
+  Spring: 3.11%
+  Summer: 3.40%
+  Fall: 2.27%
+
+Saved -> /opt/app-root/src/Forecasting-Energy-Demand/Sangar/metrics_zonal_refit2023_fx.json

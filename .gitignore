@@ -28,3 +28,7 @@ mlflow.db
 .cache/
 reports/live_forecast.parquet
 reports/live_forecast_meta.json
+
+# Cached eval APE arrays (63 MB). Provenance for the metrics JSONs, but
+# derived and regenerable -- kept on disk, out of the clone.
+*.npz
