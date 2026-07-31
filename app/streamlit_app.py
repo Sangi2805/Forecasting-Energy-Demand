@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import date, timedelta
 from io import StringIO
 from pathlib import Path
@@ -14,6 +15,12 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+
+# `streamlit run app/streamlit_app.py` puts app/ on sys.path, not the repo root,
+# so the sibling modules are not importable as a package without this.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app import live_forecast as lfc  # noqa: E402  (needs the path fix above)
 
 # ---------------------------------------------------------------------------
 # Paths & zone metadata
@@ -509,13 +516,78 @@ def zone_snapshot(live: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Live forecast helpers
+# ---------------------------------------------------------------------------
+ET = "America/New_York"
+PRED_ARCHIVE = ROOT / "reports" / "tft_hourly_predictions.parquet"
+
+# Measured on 22 held-out origins x 120h (scripts/backtest_live_pipeline.py and
+# the calibration sweep). The P10-P90 interval is close to nominal statewide but
+# materially over-confident per zone, so the UI must not present them alike.
+COVERAGE_STATEWIDE = 78.3
+COVERAGE_ZONE_RANGE = (47.4, 74.7)
+
+
+def to_et(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """UTC-naive or UTC-aware -> Eastern. NYISO operates in Eastern; a peak
+    reported at 22:00 UTC reads as nonsense to anyone looking at the grid."""
+    idx = pd.DatetimeIndex(index)
+    idx = idx.tz_localize("UTC") if idx.tz is None else idx.tz_convert("UTC")
+    return idx.tz_convert(ET)
+
+
+def humanise_age(seconds: float | None) -> str:
+    if seconds is None:
+        return "never"
+    if seconds < 90:
+        return "just now"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"{minutes} min ago"
+    hours, mins = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {mins}m ago"
+    return f"{hours // 24}d ago"
+
+
+@st.cache_data(show_spinner=False)
+def zone_accuracy() -> pd.DataFrame:
+    """Per-zone MAPE from the banked held-out predictions (854 issue dates).
+
+    The 2.95% headline is a *statewide* number; zone errors partly cancel when
+    summed. Showing one figure beside a zone selector would overstate zone-level
+    reliability, so each zone carries its own.
+    """
+    if not PRED_ARCHIVE.exists():
+        return pd.DataFrame()
+    df = pd.read_parquet(PRED_ARCHIVE, columns=["zone", "lead_day", "pred_mw", "actual_mw"])
+    df["ape"] = (df["pred_mw"] - df["actual_mw"]).abs() / df["actual_mw"].clip(lower=1) * 100
+    overall = df.groupby("zone")["ape"].mean().rename("mape_all")
+    day1 = df[df["lead_day"] == 1].groupby("zone")["ape"].mean().rename("mape_day1")
+    return pd.concat([overall, day1], axis=1).reset_index()
+
+
+def live_scope_frame(live: pd.DataFrame, scope: str) -> pd.DataFrame:
+    """Collapse the long live frame to one series for Statewide or a single zone.
+
+    Columns are taken from what the cache actually holds; hardcoding the list
+    silently dropped nyiso_mw and made a working comparison look unavailable.
+    """
+    cols = [c for c in ("actual_mw", "pred_mw", "pred_lo", "pred_hi", "nyiso_mw")
+            if c in live.columns]
+    if scope != "Statewide":
+        return live[live["zone"] == scope].set_index("ts_utc").sort_index()[cols]
+    return live.groupby("ts_utc")[cols].sum(min_count=1).sort_index()
+
+
+# ---------------------------------------------------------------------------
 # UI chrome
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="EnergyAI | NYISO Demand",
     page_icon="⚡",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 st.markdown(
@@ -523,7 +595,7 @@ st.markdown(
     <style>
       @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap');
 
-      /* Soften header; keep expand-sidebar control; hide Deploy chrome */
+      /* Soften header; hide Deploy chrome */
       header[data-testid="stHeader"] {{
         background: transparent !important;
         color: {COLORS["text"]} !important;
@@ -538,48 +610,21 @@ st.markdown(
         display: none !important;
         visibility: hidden !important;
       }}
-      /* Native reopen control (appears when sidebar is collapsed) */
+      /* No sidebar, so suppress the collapse/expand chevron entirely. Streamlit
+         still renders the control in some versions even with no sidebar body. */
       [data-testid="stExpandSidebarButton"],
-      [data-testid="stSidebarCollapseButton"] {{
-        display: flex !important;
-        visibility: visible !important;
-        opacity: 1 !important;
-        pointer-events: auto !important;
-        z-index: 1000000 !important;
-        width: 2.6rem !important;
-        height: 2.6rem !important;
-        border-radius: 999px !important;
-        background: rgba(26, 155, 142, 0.92) !important;
-        border: 1px solid rgba(232, 238, 244, 0.35) !important;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;
-        align-items: center !important;
-        justify-content: center !important;
-      }}
-      [data-testid="stExpandSidebarButton"] svg,
-      [data-testid="stSidebarCollapseButton"] svg {{
-        fill: #e8eef4 !important;
-        color: #e8eef4 !important;
-        stroke: #e8eef4 !important;
+      [data-testid="stSidebarCollapseButton"],
+      [data-testid="collapsedControl"],
+      [data-testid="stSidebar"],
+      [data-testid="stSidebarNav"],
+      button[kind="headerNoPadding"] {{
+        display: none !important;
+        visibility: hidden !important;
+        width: 0 !important;
+        pointer-events: none !important;
       }}
       div[data-testid="stAppViewContainer"] > section > div {{
         padding-top: 1rem;
-      }}
-      .ea-deploy a {{
-        display: flex !important;
-        align-items: center;
-        justify-content: center;
-        width: 100%;
-        min-height: 2.6rem;
-        border-radius: 999px !important;
-        background: rgba(26, 155, 142, 0.22) !important;
-        border: 1px solid rgba(26, 155, 142, 0.55) !important;
-        color: {COLORS["text"]} !important;
-        font-weight: 700 !important;
-        text-decoration: none !important;
-        backdrop-filter: blur(10px);
-      }}
-      .ea-deploy a:hover {{
-        background: rgba(26, 155, 142, 0.35) !important;
       }}
 
       .stApp {{
@@ -588,11 +633,6 @@ st.markdown(
         color: {COLORS["text"]};
         font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
       }}
-      [data-testid="stSidebar"] {{
-        background: {COLORS["panel"]};
-        border-right: 1px solid {COLORS["border"]};
-      }}
-      [data-testid="stSidebar"] * {{ color: {COLORS["text"]}; }}
       .block-container {{ padding-top: 1.4rem; padding-bottom: 2rem; max-width: 1280px; }}
       h1, h2, h3, h4 {{ font-family: "IBM Plex Sans", sans-serif; letter-spacing: -0.02em; }}
       div[data-testid="stMetric"] {{
@@ -682,172 +722,38 @@ if zonal.empty:
 day_mape = load_day_mape()
 selected_zones = ZONE_COLS
 
-# Sidebar
-with st.sidebar:
-    st.markdown("### Deploy")
-    deploy_url = (
-        "https://share.streamlit.io/deploy"
-        "?repository=Sangi2805/End-to-End-Multivariate-Time-Series-Forecasting-for-Energy-Demand"
-        "&branch=iteration3"
-        "&mainModule=app/streamlit_app.py"
-    )
-    st.markdown(
-        f'<div class="ea-deploy"><a href="{deploy_url}" target="_blank" rel="noopener noreferrer">Deploy</a></div>',
-        unsafe_allow_html=True,
-    )
-    st.caption("Opens Streamlit Community Cloud deploy.")
-    st.divider()
-    st.markdown("### Archive")
-    st.markdown(
-        f'<p class="ea-caption">'
-        f'<b>{zonal.index.min().strftime("%Y-%m-%d")}</b> → '
-        f'<b>{zonal.index.max().strftime("%Y-%m-%d")}</b><br>'
-        f"11 NYISO load zones (A–K)</p>",
-        unsafe_allow_html=True,
-    )
-    st.divider()
-    st.caption(
-        "Live: NYISO P-58B 5-min CSVs. "
-        "Forecasting + Track record: zonal TFT predictions scored against archive actuals."
-    )
+# No sidebar. It held a Deploy link pointing at the wrong repository, plus
+# archive metadata now carried by each tab's own caption; dropping it also
+# removes the collapse chevron, which has nothing left to toggle.
+ARCHIVE_RANGE = (
+    f"{zonal.index.min():%Y-%m-%d} → {zonal.index.max():%Y-%m-%d}, "
+    f"11 NYISO load zones (A–K)"
+)
 
-# Prefetch live for badge (cached 60s)
-_live_preview, _live_source = get_live_frame(zonal, hours=48)
-_badge_live = _live_source.startswith("nyiso")
-_badge_cls = "ea-badge" if _badge_live else "ea-badge mock"
-_badge_text = "NYISO live (P-58B)" if _badge_live else "Live feed mocked"
+# Badge reflects forecast freshness. It reads the on-disk cache only -- the old
+# version fired two NYISO requests on every rerun purely to colour a pill.
+_cache_age = lfc.cache_age_seconds()
+_badge_fresh = _cache_age is not None and _cache_age < 3600
+_badge_cls = "ea-badge" if _badge_fresh else "ea-badge mock"
+_badge_text = (
+    f"Live forecast · {humanise_age(_cache_age)}" if _cache_age is not None
+    else "No live forecast yet"
+)
 
 st.markdown(
     f"""
     <div class="ea-hero">
       <div>
         <div class="ea-brand">Energy<span>AI</span></div>
-        <div class="ea-sub">New York ISO load monitoring and short-horizon demand forecasting across 11 zones.</div>
+        <div class="ea-sub">New York ISO demand forecasting across 11 load zones — a 120-hour outlook from live NYISO and Open-Meteo feeds.</div>
       </div>
-      <div class="{_badge_cls}"><span class="ea-dot" style="background:{COLORS["accent"] if _badge_live else COLORS["accent2"]};box-shadow:none;"></span> {_badge_text}</div>
+      <div class="{_badge_cls}"><span class="ea-dot" style="background:{COLORS["accent"] if _badge_fresh else COLORS["accent2"]};box-shadow:none;"></span> {_badge_text}</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-SHOW_LIVE_TAB = False   # flip to True to bring the Live data tab back
-if SHOW_LIVE_TAB:
-    tab_fc, tab_live, tab_track = st.tabs(["Forecasting", "Live data", "Track record"])
-else:
-    tab_fc, tab_track = st.tabs(["Forecasting", "Track record"])
-    tab_live = None
-
-
-# ---------------------------------------------------------------------------
-# Live data — NYISO P-58B realtime (5-min)
-# ---------------------------------------------------------------------------
-if SHOW_LIVE_TAB:
-    with tab_live:
-        st.markdown("#### Live demand")
-        top_l, top_r = st.columns([3, 1])
-        with top_r:
-            if st.button("Refresh live data", use_container_width=True):
-                load_nyiso_live.clear()
-                st.rerun()
-
-        live, live_source = get_live_frame(zonal, hours=48)
-        if live.empty:
-            st.error("Could not load live or fallback demand data.")
-            st.stop()
-
-        zones_now = zone_snapshot(live)
-        as_of = live.index.max()
-        is_live = live_source.startswith("nyiso")
-
-        if is_live:
-            st.success(
-                f"Streaming **NYISO P-58B Real-Time Actual Load** (5-min zonal) · "
-                f"last point **{as_of.strftime('%Y-%m-%d %H:%M')} UTC** · cache 60s",
-                icon="✅",
-            )
-        else:
-            st.warning(
-                "NYISO live feed unavailable — showing mocked archive replay. "
-                f"Detail: `{live_source}`",
-                icon="⚠️",
-            )
-
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            series = live[selected_zones]
-            fig_live = go.Figure()
-            palette = px.colors.sample_colorscale(
-                "Tealgrn", samplepoints=np.linspace(0.2, 0.95, len(selected_zones))
-            )
-            for i, zone in enumerate(selected_zones):
-                fig_live.add_trace(
-                    go.Scatter(
-                        x=series.index,
-                        y=series[zone],
-                        name=f"{ZONE_META[zone]['code']} {zone}",
-                        mode="lines",
-                        line=dict(width=1.6, color=palette[i]),
-                    )
-                )
-            fig_live.update_layout(
-                **{k: v for k, v in PLOTLY_LAYOUT.items() if k != "margin"},
-                height=420,
-                yaxis_title="Demand (MW)",
-                xaxis_title="Time (UTC)",
-                hovermode="x unified",
-                margin=dict(l=48, r=24, t=40, b=40),
-            )
-            st.plotly_chart(fig_live, use_container_width=True)
-
-        with c2:
-            st.markdown("##### Statewide")
-            fig_tot = go.Figure()
-            fig_tot.add_trace(
-                go.Scatter(
-                    x=live.index,
-                    y=live["NYISO_TOTAL"],
-                    name="NYISO total",
-                    fill="tozeroy",
-                    line=dict(color=COLORS["live"], width=2),
-                    fillcolor="rgba(26,155,142,0.18)",
-                )
-            )
-            fig_tot.update_layout(
-                **{k: v for k, v in PLOTLY_LAYOUT.items() if k != "margin"},
-                height=420,
-                yaxis_title="MW",
-                showlegend=False,
-                margin=dict(l=48, r=24, t=40, b=40),
-            )
-            st.plotly_chart(fig_tot, use_container_width=True)
-
-        # KPIs for latest interval
-        latest = live.iloc[-1]
-        statewide_now = float(latest["NYISO_TOTAL"])
-        prev = float(live.iloc[-2]["NYISO_TOTAL"]) if len(live) > 1 else statewide_now
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Statewide now", f"{statewide_now:,.0f} MW", f"{statewide_now - prev:+,.0f} MW")
-        k2.metric("Peak (window)", f"{float(live['NYISO_TOTAL'].max()):,.0f} MW")
-        k3.metric("As of (UTC)", as_of.strftime("%Y-%m-%d %H:%M"))
-
-        st.markdown("##### Latest reading by zone")
-        latest_row = (
-            zones_now.sort_values("demand_mw", ascending=False)
-            .assign(updated=as_of.strftime("%Y-%m-%d %H:%M UTC"))
-        )
-        st.dataframe(
-            latest_row[["code", "label", "demand_mw", "updated"]].rename(
-                columns={"code": "Zone", "label": "Name", "demand_mw": "MW", "updated": "Updated"}
-            ),
-            use_container_width=True,
-            hide_index=True,
-            column_config={"MW": st.column_config.NumberColumn(format="%.0f")},
-        )
-
-
-    # ---------------------------------------------------------------------------
-    # Forecasting — 24..120h horizon (selecting Nh includes 24h..Nh)
-    # ---------------------------------------------------------------------------
+tab_fc, tab_live = st.tabs(["Forecasting", "Live forecast"])
 with tab_fc:
     st.markdown("#### Day-ahead forecasting")
     origin = forecast_origin(zonal)
@@ -858,10 +764,11 @@ with tab_fc:
         day = st.radio(
             "Forecast horizon",
             options=[1, 2, 3, 4, 5],
-            format_func=lambda d: f"{d * 24} hours",
+            format_func=lambda d: f"Day {d}",
             horizontal=True,
             index=0,
-            help="Selecting N hours shows the full window from 24 hours through N hours as one continuous series.",
+            help="Lead day within the forecast issued on the selected date. "
+                 "Day 1 is the first 24 hours after issue, Day 5 the fifth.",
         )
     with c_scope:
         forecast_scope = st.selectbox(
@@ -892,46 +799,50 @@ with tab_fc:
         if st.session_state["sel_issue"] not in _ISSUE_SET:
             st.caption("No forecast was issued on that date — showing the nearest earlier one.")
 
-    included_days = list(range(1, day + 1))
-    horizon_hours = day * 24
+    # Day N means day N alone -- the 24 hours of that lead day. It used to
+    # accumulate days 1..N into one series, so every metric, the chart and the
+    # map described a window rather than the day actually selected.
+    horizon_hours = 24
     actual_col, pred_col, scope_label = forecast_scope_columns(forecast_scope)
 
-    frames = []
-    for d in included_days:
-        target = day_mape.get(d, 3.5)
-        part = mock_day_predictions(zonal, d, target_mape=target)
-        if part.empty:
-            st.warning(f"Not enough archive history for {d * 24} hours.")
-            st.stop()
-        part = part.copy()
-        part["day"] = d
-        frames.append(part)
-
-    day_df = pd.concat(frames).sort_index()
+    day_df = mock_day_predictions(zonal, day, target_mape=day_mape.get(day, 3.5))
+    if day_df.empty:
+        st.warning(f"No forecast available for Day {day} on that issue date.")
+        st.stop()
+    day_df = day_df.copy().sort_index()
+    day_df["day"] = day
     day_df["actual"] = day_df[actual_col]
     day_df["predicted"] = day_df[pred_col]
 
     window_start = day_df.index.min()
     window_end = day_df.index.max()
-    days_label = f"{horizon_hours} hours"
-    target_note = ", ".join(f"{d * 24}h≈{day_mape.get(d, 3.5):.2f}%" for d in included_days)
+    days_label = f"Day {day}"
     st.caption(
         f"**{days_label}** · **{scope_label}** · "
-        f"{window_start.strftime('%Y-%m-%d %H:%M')} → "
-        f"{window_end.strftime('%Y-%m-%d %H:%M')} UTC · "
-        f"forecast origin {origin.strftime('%Y-%m-%d')} · "
-        "predictions from the trained zonal TFT model"
+        f"target date **{window_start.strftime('%a %d %b %Y')}** "
+        f"({window_start.strftime('%H:%M')} → {window_end.strftime('%H:%M')} UTC) · "
+        f"forecast issued {origin.strftime('%Y-%m-%d')} · "
+        f"predictions from the trained zonal TFT model · "
+        f"archive {ARCHIVE_RANGE}"
     )
 
     summary = day_summary(day_df, actual_col="actual", pred_col="predicted")
     forecast_peak = float(day_df["predicted"].max())
     forecast_min = float(day_df["predicted"].min())
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Actual (avg)", f"{summary['actual_mw']:,.0f} MW")
-    m2.metric("Predicted (avg)", f"{summary['predicted_mw']:,.0f} MW")
-    m3.metric("Forecast Peak", f"{forecast_peak:,.0f} MW")
-    m4.metric("Forecast Min", f"{forecast_min:,.0f} MW")
-    m5.metric("Error %", f"{summary['error_pct']:.2f}%")
+    m1.metric("Actual", f"{summary['actual_mw']:,.0f} MW",
+              help=f"Mean realised demand across the 24 hours of Day {day} "
+                   f"({window_start:%d %b}), {scope_label}.")
+    m2.metric("Predicted", f"{summary['predicted_mw']:,.0f} MW",
+              help=f"Mean forecast demand across the same 24 hours.")
+    m3.metric("Forecast Peak", f"{forecast_peak:,.0f} MW",
+              help=f"Highest forecast hour on Day {day}.")
+    m4.metric("Forecast Min", f"{forecast_min:,.0f} MW",
+              help=f"Lowest forecast hour on Day {day}.")
+    m5.metric("Error % (MAPE)", f"{summary['error_pct']:.2f}%",
+              help=f"Mean absolute percentage error (MAPE) across Day {day}'s "
+                   f"24 hours: the average of |predicted − actual| ÷ actual, "
+                   f"hour by hour.")
     _ov = real_overall_mape() if (_REAL is not None and not _REAL.empty) else {}
     if _ov and forecast_scope == "Statewide":
         st.caption(
@@ -960,7 +871,10 @@ with tab_fc:
     panel_height = 460
 
     with chart_col:
-        st.markdown(f"##### {scope_label} demand — actual vs predicted")
+        st.markdown(
+            f"##### {scope_label} — actual vs predicted, Day {day} "
+            f"({window_start:%d %b})"
+        )
         fig_fc = go.Figure()
         fig_fc.add_trace(
             go.Scatter(
@@ -980,19 +894,6 @@ with tab_fc:
                 line=dict(color=COLORS["forecast"], width=2.4, dash="dash"),
             )
         )
-        if len(included_days) > 1:
-            for d in included_days[1:]:
-                boundary = day_df.loc[day_df["day"] == d].index.min()
-                if pd.notna(boundary):
-                    fig_fc.add_vline(
-                        x=boundary.to_pydatetime(),
-                        line_width=1,
-                        line_dash="dot",
-                        line_color=COLORS["muted"],
-                        annotation_text=f"{d * 24}h",
-                        annotation_position="top left",
-                        annotation_font_color=COLORS["muted"],
-                    )
         fig_fc.update_layout(
             **{k: v for k, v in PLOTLY_LAYOUT.items() if k != "margin"},
             height=panel_height,
@@ -1001,14 +902,14 @@ with tab_fc:
             hovermode="x unified",
             margin=dict(l=48, r=16, t=24, b=40),
         )
-        st.plotly_chart(fig_fc, use_container_width=True)
+        st.plotly_chart(fig_fc, width="stretch")
 
     with table_col:
-        st.markdown(f"##### HOUR-BY-HOUR · {horizon_hours}h block")
-        st.caption(f"{scope_label} · forecast vs actual")
+        st.markdown(f"##### HOUR-BY-HOUR · Day {day}")
+        st.caption(f"{scope_label} · {window_start:%a %d %b %Y} · forecast vs actual")
         st.dataframe(
             hourly,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=panel_height,
             column_config={
@@ -1019,18 +920,18 @@ with tab_fc:
             },
         )
 
-    # --- Map: consumption for included days ---
+    # --- Map: zone consumption on the selected day only ---
     zone_df = zone_day_consumption(day_df)
     map_df = zone_df if forecast_scope == "Statewide" else zone_df[zone_df["zone"] == forecast_scope]
-    st.markdown("##### Zone demand on this forecast horizon")
+    st.markdown(f"##### Zone demand — Day {day} ({window_start:%d %b})")
     st.caption(
-        f"Map is tied to the selected **{horizon_hours} hours** window"
+        f"Map covers **Day {day}** only, {window_start:%a %d %b %Y}"
         + (
             " (all zones)."
             if forecast_scope == "Statewide"
             else f" · highlighting **{scope_label}**."
         )
-        + " Bubble size = predicted energy (MWh), color = forecast error (%)."
+        + " Bubble size = predicted energy (MWh), colour = forecast error (%)."
     )
 
     scatter_fn = getattr(px, "scatter_map", None) or px.scatter_mapbox
@@ -1077,166 +978,343 @@ with tab_fc:
             showlegend=False,
         )
     )
-    st.plotly_chart(fig_zmap, use_container_width=True)
+    st.plotly_chart(fig_zmap, width="stretch")
 
 
 # ---------------------------------------------------------------------------
-# Track record — scored past day-ahead forecasts vs realized demand
+# Live forecast — next 120h from live NYISO + Open-Meteo, laid out like the
+# Forecasting tab: pick a lead day and target date, then compare our model
+# against NYISO's own published forecast.
 # ---------------------------------------------------------------------------
-with tab_track:
-    st.markdown("#### Track record")
+with tab_live:
+    live_df, live_meta = lfc.load_cached()
+
+    head_l, head_r = st.columns([3, 1])
+    with head_l:
+        st.markdown("#### Live 5-day forecast")
+        if live_meta:
+            st.markdown(
+                f'<p class="ea-caption">Last refreshed <b>{humanise_age(_cache_age)}</b>'
+                f' · NYISO load through <b>'
+                f'{to_et([live_meta["demand_last_hour"]])[0]:%d %b %H:%M} ET</b>'
+                f' · weather run through <b>'
+                f'{to_et([live_meta["weather_last_hour"]])[0]:%d %b %H:%M} ET</b></p>',
+                unsafe_allow_html=True,
+            )
+    with head_r:
+        # A fragment re-runs on its own timer without re-running the whole page,
+        # so the cooldown ticks down live instead of only on interaction.
+        @st.fragment(run_every=1.0)
+        def _refresh_control() -> None:
+            wait = lfc.seconds_until_refresh()
+            cooling = wait > 0 and live_df is not None
+            label = (f"Refresh in {int(wait // 60)}:{int(wait % 60):02d}" if cooling
+                     else "Refresh forecast")
+            if st.button(label, width="stretch", disabled=cooling,
+                         type="primary", key="live_refresh"):
+                try:
+                    # get_forecast(force=True) re-checks the limit server-side;
+                    # the disabled button is a courtesy, not the enforcement point.
+                    with st.spinner("Pulling NYISO + Open-Meteo and running the model…"):
+                        lfc.get_forecast(force=True)
+                    st.cache_data.clear()
+                    # scope="app" is required here: a bare st.rerun() inside a
+                    # fragment reruns only the fragment, so the charts, tables
+                    # and maps would keep showing the previous forecast.
+                    st.rerun(scope="app")
+                except lfc.RateLimited as exc:
+                    st.warning(str(exc))
+                except Exception as exc:  # network or upstream outage
+                    st.error(f"Refresh failed: {type(exc).__name__}: {exc}")
+            st.caption("Limited to one refresh per 10 min." if cooling
+                       else "Ready to refresh.")
+
+        _refresh_control()
+
+    if live_df is None:
+        st.info(
+            "No live forecast cached yet. Press **Refresh forecast** to pull the "
+            "latest NYISO load and Open-Meteo forecast and run the model."
+        )
+        st.stop()
+
+    origin_utc = pd.Timestamp(live_meta["origin"])
+    # Lead day N covers the Nth 24h block after the origin. The date picker and
+    # the radio are two views of the same choice, so they stay in sync.
+    day_dates = [
+        (origin_utc + pd.Timedelta(days=d - 1)).date() for d in range(1, 6)
+    ]
+
+    # Lead day and target date are two views of one choice, kept in sync both
+    # ways. Clamped on every run so a cache refresh (which shifts the origin)
+    # cannot leave a stale date selected.
+    if st.session_state.get("live_day") not in (1, 2, 3, 4, 5):
+        st.session_state["live_day"] = 1
+    if st.session_state.get("live_date") not in day_dates:
+        st.session_state["live_date"] = day_dates[st.session_state["live_day"] - 1]
+
+    def _sync_from_day() -> None:
+        st.session_state["live_date"] = day_dates[st.session_state["live_day"] - 1]
+
+    def _sync_from_date() -> None:
+        picked = st.session_state["live_date"]
+        if picked in day_dates:
+            st.session_state["live_day"] = day_dates.index(picked) + 1
+        else:  # outside the forecast window: snap back to the current day
+            st.session_state["live_date"] = day_dates[st.session_state["live_day"] - 1]
+
+    c_day, c_date, c_scope = st.columns([2, 1, 1])
+    with c_day:
+        st.radio(
+            "Forecast horizon",
+            options=[1, 2, 3, 4, 5],
+            format_func=lambda d: f"Day {d}",
+            horizontal=True,
+            key="live_day",
+            on_change=_sync_from_day,
+            help="Lead day within the forecast issued now. Day 1 is the next "
+                 "24 hours, Day 5 the fifth.",
+        )
+    with c_date:
+        st.date_input(
+            "Target date",
+            min_value=day_dates[0],
+            max_value=day_dates[-1],
+            key="live_date",
+            on_change=_sync_from_date,
+            help="The five dates this forecast covers. Picking one selects the "
+                 "matching lead day, and vice versa.",
+        )
+    live_day = st.session_state["live_day"]
+    with c_scope:
+        live_scope = st.selectbox(
+            "Zone",
+            options=["Statewide"] + ZONE_COLS,
+            index=0,
+            format_func=lambda z: ("Statewide" if z == "Statewide"
+                                   else f"{ZONE_META[z]['code']} — {ZONE_META[z]['label']}"),
+            key="live_scope",
+            help="Statewide = NYISO total. Otherwise everything below uses the "
+                 "selected load zone.",
+        )
+
+    scope_label_live = ("Statewide" if live_scope == "Statewide"
+                        else f"{ZONE_META[live_scope]['code']} — {ZONE_META[live_scope]['label']}")
+
+    series = live_scope_frame(live_df, live_scope)
+    win_start = origin_utc + pd.Timedelta(days=live_day - 1)
+    win_end = win_start + pd.Timedelta(hours=23)
+    block = series.loc[win_start:win_end]
+    if block.empty or block["pred_mw"].isna().all():
+        st.warning(f"No forecast hours available for Day {live_day}.")
+        st.stop()
+
+    has_nyiso = "nyiso_mw" in block.columns and block["nyiso_mw"].notna().any()
+    nyiso_issue = live_meta.get("nyiso_issue")
+
     st.caption(
-        "Daily scores for completed day-ahead forecasts vs archive actuals "
-        "(zonal TFT model output, held-out test period). "
-        "Overall test error 2.95%; 2.21% day-ahead. Error = megawatts missed as a share of megawatts demanded."
+        f"**Day {live_day}** · **{scope_label_live}** · "
+        f"target date **{to_et([win_start])[0]:%a %d %b %Y}** · "
+        f"forecast issued **{to_et([origin_utc])[0]:%d %b %H:%M} ET** · "
+        f"zonal TFT, held-out MAPE "
+        f"{(live_meta.get('model', {}).get('day_mape') or {}).get(live_day, float('nan')):.2f}% "
+        f"at this horizon"
     )
 
-    lookback = st.selectbox(
-        "Lookback window",
-        options=[14, 30, 45, 60, 90],
-        index=2,
-        format_func=lambda d: f"Last {d} days",
-        key="track_lookback",
-    )
-    zonal_mtime = ZONAL_PATH.stat().st_mtime if ZONAL_PATH.exists() else 0.0
-    ledger = build_track_record(zonal_mtime, n_days=int(lookback))
+    (sub_main,) = st.tabs(["Our prediction vs NYISO prediction"])
 
-    if ledger.empty:
-        st.warning("Not enough complete days in the archive to build a track record.")
-    else:
-        avg_wmape = float(ledger["wmape"].mean())
-        avg_peak = float(ledger["peak_ape"].mean())
-        best = ledger.loc[ledger["wmape"].idxmin()]
-        worst = ledger.loc[ledger["wmape"].idxmax()]
-        hit_rate = float((ledger["wmape"] <= 3.0).mean() * 100)
+    with sub_main:
+        x = to_et(block.index)
+        ours = block["pred_mw"]
+        panel_height = 430
 
-        k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric("Avg error", f"{avg_wmape:.2f}%")
-        k2.metric("Avg peak-hour error", f"{avg_peak:.2f}%")
-        k3.metric("Days under 3% error", f"{hit_rate:.0f}%")
-        k4.metric("Best day", f"{best['date']}", delta=f"{best['wmape']:.2f}% error")
-        k5.metric("Worst day", f"{worst['date']}", delta=f"{worst['wmape']:.2f}% error", delta_color="inverse")
+        # --- Our forecast: cards ------------------------------------------
+        o_peak_ts, o_min_ts = ours.idxmax(), ours.idxmin()
+        c1, c2, c3, _c4, _c5 = st.columns(5)
+        c1.metric("Predicted", f"{ours.mean():,.0f} MW",
+                  help=f"Our mean forecast demand across Day {live_day}'s 24 hours, "
+                       f"{scope_label_live}. These hours have not happened yet, so "
+                       f"there is no actual to compare against.")
+        c2.metric("Forecast Peak", f"{ours.max():,.0f} MW",
+                  help=f"Our highest forecast hour on Day {live_day}, at "
+                       f"{to_et([o_peak_ts])[0]:%H:%M} ET.")
+        c3.metric("Forecast Min", f"{ours.min():,.0f} MW",
+                  help=f"Our lowest forecast hour on Day {live_day}, at "
+                       f"{to_et([o_min_ts])[0]:%H:%M} ET.")
 
-        chart_col, replay_col = st.columns([1.15, 1])
+        # --- NYISO forecast: cards, same shape, directly below -------------
+        if has_nyiso:
+            theirs = block["nyiso_mw"]
+            n_peak_ts, n_min_ts = theirs.idxmax(), theirs.idxmin()
+            n1, n2, n3, _n4, _n5 = st.columns(5)
+            n1.metric("NYISO Predicted", f"{theirs.mean():,.0f} MW",
+                      help=f"NYISO's own mean forecast for the same 24 hours "
+                           f"(isolf, issue {nyiso_issue}).")
+            n2.metric("NYISO Peak", f"{theirs.max():,.0f} MW",
+                      help=f"NYISO's highest forecast hour on Day {live_day}, at "
+                           f"{to_et([n_peak_ts])[0]:%H:%M} ET.")
+            n3.metric("NYISO Min", f"{theirs.min():,.0f} MW",
+                      help=f"NYISO's lowest forecast hour on Day {live_day}, at "
+                           f"{to_et([n_min_ts])[0]:%H:%M} ET.")
+        else:
+            reason = live_meta.get("nyiso_error")
+            if reason is None and "nyiso_mw" not in live_df.columns:
+                reason = ("this cached run predates NYISO comparison support — "
+                          "press Refresh forecast to pull it")
+            st.info(
+                "NYISO's published forecast (isolf) is not in this run, so only "
+                "ours is shown. Our forecast is unaffected — it does not depend "
+                "on it." + (f"\n\nReason: `{reason}`" if reason else "")
+            )
+
+        # --- Chart + hourly table -----------------------------------------
+        compare = " vs NYISO forecast" if has_nyiso else ""
+        st.markdown(
+            f"##### {scope_label_live} hourly demand — our forecast{compare}, "
+            f"Day {live_day} ({to_et([win_start])[0]:%a %d %b})"
+        )
+
+        chart_col, table_col = st.columns([1.15, 1], gap="large")
 
         with chart_col:
-            st.markdown("##### Daily error")
-            trend = ledger.sort_values("date_ts")
-            fig_tr = go.Figure()
-            fig_tr.add_trace(
-                go.Scatter(
-                    x=trend["date"],
-                    y=trend["wmape"],
-                    mode="lines+markers",
-                    name="Error",
-                    line=dict(color=COLORS["accent"], width=2.2),
-                    marker=dict(size=6),
-                    fill="tozeroy",
-                    fillcolor="rgba(26,155,142,0.12)",
-                )
-            )
-            fig_tr.add_hline(
-                y=avg_wmape,
-                line_dash="dot",
-                line_color=COLORS["muted"],
-                annotation_text=f"avg {avg_wmape:.2f}%",
-                annotation_position="top left",
-                annotation_font_color=COLORS["muted"],
-            )
-            fig_tr.update_layout(
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=x, y=block["pred_hi"], mode="lines", line=dict(width=0),
+                hoverinfo="skip", showlegend=False, name="P90",
+            ))
+            fig.add_trace(go.Scatter(
+                x=x, y=block["pred_lo"], mode="lines", line=dict(width=0),
+                fill="tonexty", fillcolor="rgba(232,168,56,0.18)",
+                hoverinfo="skip", name="Our P10–P90 range",
+            ))
+            fig.add_trace(go.Scatter(
+                x=x, y=ours, mode="lines", name="Our forecast",
+                line=dict(color=COLORS["forecast"], width=2.4, dash="dash"),
+            ))
+            if has_nyiso:
+                fig.add_trace(go.Scatter(
+                    x=x, y=block["nyiso_mw"], mode="lines", name="NYISO forecast",
+                    line=dict(color=COLORS["live"], width=2.0, dash="dot"),
+                ))
+            fig.update_layout(
                 **{k: v for k, v in PLOTLY_LAYOUT.items() if k != "margin"},
-                height=320,
+                height=panel_height, hovermode="x unified",
+                yaxis_title="Demand (MW)", xaxis_title="Eastern time",
                 margin=dict(l=48, r=16, t=24, b=40),
-                yaxis_title="Error %",
-                xaxis_title=None,
-                showlegend=False,
             )
-            st.plotly_chart(fig_tr, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
-        with replay_col:
-            st.markdown("##### Day replay")
-            date_options = ledger["date"].tolist()
-            pick = st.selectbox("Replay day", options=date_options, key="track_replay_day")
-            day_start = pd.Timestamp(pick, tz="UTC")
-            target = float(load_day_mape().get(1, 2.48))
-            replay = predictions_for_calendar_day(zonal, day_start, target_mape=target)
-            if replay.empty:
-                st.info("No hourly series for that day.")
-            else:
-                sc = score_day_frame(replay)
-                r1, r2, r3 = st.columns(3)
-                r1.metric("Error", f"{sc['wmape']:.2f}%")
-                r2.metric("Peak-hour error", f"{sc['peak_ape']:.2f}%")
-                r3.metric(
-                    "Peaks (P / A)",
-                    f"{sc['predicted_peak_mw']/1000:.1f} / {sc['actual_peak_mw']/1000:.1f} GW",
-                )
-                fig_rp = go.Figure()
-                fig_rp.add_trace(
-                    go.Scatter(
-                        x=replay.index,
-                        y=replay["actual"],
-                        name="Actual",
-                        mode="lines",
-                        line=dict(color=COLORS["actual"], width=2.4),
-                    )
-                )
-                fig_rp.add_trace(
-                    go.Scatter(
-                        x=replay.index,
-                        y=replay["predicted"],
-                        name="Predicted",
-                        mode="lines",
-                        line=dict(color=COLORS["forecast"], width=2.4, dash="dash"),
-                    )
-                )
-                fig_rp.update_layout(
-                    **{k: v for k, v in PLOTLY_LAYOUT.items() if k not in ("margin", "legend")},
-                    height=260,
-                    margin=dict(l=48, r=16, t=16, b=32),
-                    yaxis_title="MW",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-                )
-                st.plotly_chart(fig_rp, use_container_width=True)
-
-        st.markdown("##### Daily scorecard")
-        table = ledger[
-            [
-                "date",
-                "predicted_peak_mw",
-                "actual_peak_mw",
-                "peak_ape",
-                "wmape",
-                "mape",
-                "accuracy",
-                "predicted_peak_hour",
-                "actual_peak_hour",
-            ]
-        ].copy()
-        table = table.rename(
-            columns={
-                "date": "Date",
-                "predicted_peak_mw": "Pred peak (MW)",
-                "actual_peak_mw": "Actual peak (MW)",
-                "peak_ape": "Peak-hour error %",
-                "wmape": "Error %",
-                "mape": "MAPE %",
-                "accuracy": "Accuracy %",
-                "predicted_peak_hour": "Pred peak hour",
-                "actual_peak_hour": "Actual peak hour",
+        with table_col:
+            st.markdown(
+                f"##### HOUR-BY-HOUR · Day {live_day}"
+                + (" · ours vs NYISO" if has_nyiso else "")
+            )
+            st.caption(f"{scope_label_live} · {to_et([win_start])[0]:%a %d %b %Y}")
+            cols = {
+                "Time (ET)": x.strftime("%H:%M"),
+                "Ours (MW)": ours.round(0),
+                "P10 (MW)": block["pred_lo"].round(0),
+                "P90 (MW)": block["pred_hi"].round(0),
             }
+            if has_nyiso:
+                cols["NYISO (MW)"] = block["nyiso_mw"].round(0)
+                cols["Diff (MW)"] = (ours - block["nyiso_mw"]).round(0)
+            table = pd.DataFrame(cols)
+            st.dataframe(
+                table, width="stretch", hide_index=True, height=panel_height,
+                column_config={
+                    **{c: st.column_config.NumberColumn(format="%.0f")
+                       for c in table.columns if c not in ("Time (ET)", "Diff (MW)")},
+                    "Diff (MW)": st.column_config.NumberColumn(format="%+.0f"),
+                },
+            )
+            st.download_button(
+                "Download (CSV)",
+                data=table.to_csv(index=False).encode("utf-8"),
+                file_name=f"forecast_day{live_day}_{live_scope}.csv",
+                mime="text/csv", width="stretch",
+                key=f"dl_{live_day}_{live_scope}",
+            )
+
+        cov = (f"{COVERAGE_STATEWIDE:.0f}%" if live_scope == "Statewide"
+               else f"{COVERAGE_ZONE_RANGE[0]:.0f}–{COVERAGE_ZONE_RANGE[1]:.0f}%")
+        caveat = ("" if live_scope == "Statewide" else
+                  " At zone level the band is over-confident — treat it as indicative only.")
+        note = (
+            f"Shaded band is our model's own P10–P90 quantile output; measured "
+            f"coverage on held-out data is **{cov}** against a nominal 80%.{caveat}"
         )
-        st.dataframe(
-            table,
-            use_container_width=True,
-            hide_index=True,
-            height=360,
-            column_config={
-                "Pred peak (MW)": st.column_config.NumberColumn(format="%,.0f"),
-                "Actual peak (MW)": st.column_config.NumberColumn(format="%,.0f"),
-                "Peak-hour error %": st.column_config.NumberColumn(format="%.2f"),
-                "Error %": st.column_config.NumberColumn(format="%.2f"),
-                "MAPE %": st.column_config.NumberColumn(format="%.2f"),
-                "Accuracy %": st.column_config.NumberColumn(format="%.2f"),
-            },
+        if has_nyiso:
+            gap = float(ours.mean() - block["nyiso_mw"].mean())
+            note += (
+                f" NYISO's line is their published zonal load forecast "
+                f"(isolf, issue **{nyiso_issue}**); over Day {live_day} we sit "
+                f"**{gap:+,.0f} MW** ({gap / float(block['nyiso_mw'].mean()) * 100:+.1f}%) "
+                f"against it. Neither is truth — both are forecasts of the same hours."
+            )
+        st.caption(note)
+
+        # --- Zone map: our forecast energy for this day --------------------
+        day_rows = live_df[
+            live_df["ts_utc"].between(win_start, win_end) & live_df["pred_mw"].notna()
+        ]
+        zf = day_rows.groupby("zone")["pred_mw"].sum().rename("pred_mwh").reset_index()
+        if not zf.empty:
+            zf["code"] = zf["zone"].map(lambda z: ZONE_META[z]["code"])
+            zf["label"] = zf["zone"].map(lambda z: ZONE_META[z]["label"])
+            zf["lat"] = zf["zone"].map(lambda z: ZONE_META[z]["lat"])
+            zf["lon"] = zf["zone"].map(lambda z: ZONE_META[z]["lon"])
+            zf["share_pct"] = 100 * zf["pred_mwh"] / zf["pred_mwh"].sum()
+            acc = zone_accuracy()
+            zf = (zf.merge(acc[["zone", "mape_all"]], on="zone", how="left")
+                  if not acc.empty else zf.assign(mape_all=np.nan))
+            map_df_live = (zf if live_scope == "Statewide"
+                           else zf[zf["zone"] == live_scope])
+
+            st.markdown(
+                f"##### Our forecast energy by zone — Day {live_day} "
+                f"({to_et([win_start])[0]:%a %d %b})"
+            )
+            st.caption(
+                f"Our forecast over **Day {live_day}** only"
+                + (" (all zones)." if live_scope == "Statewide"
+                   else f" · highlighting **{scope_label_live}**.")
+                + " Bubble size = forecast energy (MWh), colour = that zone's held-out MAPE."
+            )
+            scatter_fn = getattr(px, "scatter_map", None) or px.scatter_mapbox
+            fig_map = scatter_fn(
+                map_df_live, lat="lat", lon="lon", size="pred_mwh", color="mape_all",
+                hover_name="label",
+                hover_data={"code": True, "pred_mwh": ":,.0f", "share_pct": ":.1f",
+                            "mape_all": ":.2f", "lat": False, "lon": False},
+                color_continuous_scale=["#1a9b8e", "#e8a838", "#d64545"],
+                size_max=48, zoom=5.4 if live_scope == "Statewide" else 6.4, height=450,
+            )
+            lay = {**{k: v for k, v in PLOTLY_LAYOUT.items()
+                      if k not in ("xaxis", "yaxis")},
+                   "coloraxis_colorbar": dict(title="Zone<br>MAPE %"),
+                   "margin": dict(l=0, r=0, t=8, b=0)}
+            lay["map_style" if scatter_fn is not px.scatter_mapbox else "mapbox_style"] = (
+                "carto-darkmatter"
+            )
+            fig_map.update_layout(**lay)
+            st.plotly_chart(fig_map, width="stretch",
+                            key=f"map_{live_day}_{live_scope}")
+
+    with st.expander("Run details"):
+        t = live_meta.get("timings_s", {})
+        m = live_meta.get("model", {})
+        st.markdown(
+            f"""
+- **Forecast origin** {to_et([origin_utc])[0]:%Y-%m-%d %H:%M} ET  ({origin_utc:%Y-%m-%d %H:%M} UTC)
+- **Encoder** {live_meta['encoder_hours']}h of realised load ·
+  **Horizon** {live_meta['horizon_hours']}h · **Zones** {live_meta['zones']}
+- **Checkpoint** `{m.get('checkpoint', 'n/a')}`
+- **Held-out MAPE** {m.get('overall_mape', float('nan')):.2f}% overall ·
+  {(m.get('day_mape') or {}).get(1, float('nan')):.2f}% at 24h
+- **Timings** fetch {t.get('fetch', 0):.1f}s · features {t.get('features', 0):.2f}s ·
+  inference {t.get('inference', 0):.2f}s · total {t.get('total', 0):.1f}s
+- **Sources** NYISO `palIntegrated` (actuals) · NYISO `isolf` (their forecast) ·
+  Open-Meteo forecast API (9 zonal coordinates)
+"""
         )

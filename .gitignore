@@ -22,3 +22,9 @@ mlflow.db
 
 # keep dashboard result CSVs
 !reports/*.csv
+
+# Runtime caches written by the live forecast path. Regenerated on demand;
+# committing them would churn the history and ship stale forecasts.
+.cache/
+reports/live_forecast.parquet
+reports/live_forecast_meta.json
