@@ -383,7 +383,7 @@ if _REAL is not None and not _REAL.empty:
     def real_overall_mape():
         out = {}
         for n in range(1, 6):
-            g = _REAL[_REAL["lead_day"] <= n]
+            g = _REAL[_REAL["lead_day"] == n]
             a = g["actual_NYISO_TOTAL"].to_numpy(dtype=float)
             p = g["pred_NYISO_TOTAL"].to_numpy(dtype=float)
             out[n] = float(np.mean(np.abs(a - p) / np.maximum(a, 1.0)) * 100)
@@ -505,6 +505,72 @@ def zone_snapshot(live: pd.DataFrame) -> pd.DataFrame:
         )
     out = pd.DataFrame(rows)
     out["share_pct"] = 100 * out["demand_mw"] / out["demand_mw"].sum()
+    return out
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def live_five_day_forecast(
+    zonal: pd.DataFrame,
+    live_total_now: float,
+    as_of_iso: str,
+) -> pd.DataFrame:
+    """
+    Hourly outlook for the next 5 days from as_of.
+
+    Weekly seasonal-naive profile from the demand archive, scaled so the
+    current hour-of-week matches live statewide demand. Not a TFT re-run —
+    suitable for a live "from today" view when the model parquet ends earlier.
+    """
+    as_of = pd.Timestamp(as_of_iso)
+    if as_of.tzinfo is None:
+        as_of = as_of.tz_localize("UTC")
+    else:
+        as_of = as_of.tz_convert("UTC")
+
+    hist = zonal.copy()
+    if "NYISO_TOTAL" not in hist.columns:
+        hist["NYISO_TOTAL"] = hist[ZONE_COLS].sum(axis=1)
+    cols = ZONE_COLS + ["NYISO_TOTAL"]
+    hist = hist[cols].dropna(how="all").sort_index()
+    if hist.empty:
+        return pd.DataFrame()
+
+    pattern = hist.tail(168 * 4)  # up to 4 weeks for a stable hour-of-week profile
+    how_rows: dict[tuple[int, int], pd.Series] = {}
+    how_counts: dict[tuple[int, int], int] = {}
+    for ts, row in pattern.iterrows():
+        key = (int(ts.dayofweek), int(ts.hour))
+        if key not in how_rows:
+            how_rows[key] = row.astype(float)
+            how_counts[key] = 1
+        else:
+            how_rows[key] = how_rows[key] + row.astype(float)
+            how_counts[key] += 1
+    for key in how_rows:
+        how_rows[key] = how_rows[key] / how_counts[key]
+
+    ref_key = (int(as_of.dayofweek), int(as_of.hour))
+    ref = how_rows.get(ref_key)
+    if ref is None or float(ref["NYISO_TOTAL"]) < 1:
+        scale = 1.0
+    else:
+        scale = float(np.clip(live_total_now / float(ref["NYISO_TOTAL"]), 0.7, 1.35))
+
+    origin = as_of.floor("h") + pd.Timedelta(hours=1)
+    idx = pd.date_range(origin, periods=5 * 24, freq="h", tz="UTC")
+    frames = []
+    for i, ts in enumerate(idx):
+        key = (int(ts.dayofweek), int(ts.hour))
+        base = how_rows.get(key)
+        if base is None:
+            # fall back to archive mean profile
+            base = hist[cols].mean()
+        row = (base * scale).clip(lower=0)
+        frames.append(row)
+    out = pd.DataFrame(frames, index=idx)
+    out.index.name = "ts_utc"
+    out["day"] = (np.arange(len(out)) // 24) + 1
+    out["NYISO_TOTAL"] = out[ZONE_COLS].sum(axis=1)
     return out
 
 
@@ -730,124 +796,229 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-SHOW_LIVE_TAB = False   # flip to True to bring the Live data tab back
-if SHOW_LIVE_TAB:
-    tab_fc, tab_live, tab_track = st.tabs(["Forecasting", "Live data", "Track record"])
-else:
-    tab_fc, tab_track = st.tabs(["Forecasting", "Track record"])
-    tab_live = None
+tab_fc, tab_live, tab_track = st.tabs(["Forecasting", "Live data", "Track record"])
 
 
 # ---------------------------------------------------------------------------
 # Live data — NYISO P-58B realtime (5-min)
 # ---------------------------------------------------------------------------
-if SHOW_LIVE_TAB:
-    with tab_live:
-        st.markdown("#### Live demand")
-        top_l, top_r = st.columns([3, 1])
-        with top_r:
-            if st.button("Refresh live data", use_container_width=True):
-                load_nyiso_live.clear()
-                st.rerun()
+with tab_live:
+    st.markdown("#### Live demand")
+    top_l, top_r = st.columns([3, 1])
+    with top_r:
+        if st.button("Refresh live data", use_container_width=True):
+            load_nyiso_live.clear()
+            st.rerun()
 
-        live, live_source = get_live_frame(zonal, hours=48)
-        if live.empty:
-            st.error("Could not load live or fallback demand data.")
-            st.stop()
+    live, live_source = get_live_frame(zonal, hours=48)
+    if live.empty:
+        st.error("Could not load live or fallback demand data.")
+        st.stop()
 
-        zones_now = zone_snapshot(live)
-        as_of = live.index.max()
-        is_live = live_source.startswith("nyiso")
+    zones_now = zone_snapshot(live)
+    as_of = live.index.max()
+    is_live = live_source.startswith("nyiso")
 
-        if is_live:
-            st.success(
-                f"Streaming **NYISO P-58B Real-Time Actual Load** (5-min zonal) · "
-                f"last point **{as_of.strftime('%Y-%m-%d %H:%M')} UTC** · cache 60s",
-                icon="✅",
-            )
-        else:
-            st.warning(
-                "NYISO live feed unavailable — showing mocked archive replay. "
-                f"Detail: `{live_source}`",
-                icon="⚠️",
-            )
+    if is_live:
+        st.success(
+            f"Streaming **NYISO P-58B Real-Time Actual Load** (5-min zonal) · "
+            f"last point **{as_of.strftime('%Y-%m-%d %H:%M')} UTC** · cache 60s",
+            icon="✅",
+        )
+    else:
+        st.warning(
+            "NYISO live feed unavailable — showing mocked archive replay. "
+            f"Detail: `{live_source}`",
+            icon="⚠️",
+        )
 
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            series = live[selected_zones]
-            fig_live = go.Figure()
-            palette = px.colors.sample_colorscale(
-                "Tealgrn", samplepoints=np.linspace(0.2, 0.95, len(selected_zones))
-            )
-            for i, zone in enumerate(selected_zones):
-                fig_live.add_trace(
-                    go.Scatter(
-                        x=series.index,
-                        y=series[zone],
-                        name=f"{ZONE_META[zone]['code']} {zone}",
-                        mode="lines",
-                        line=dict(width=1.6, color=palette[i]),
-                    )
-                )
-            fig_live.update_layout(
-                **{k: v for k, v in PLOTLY_LAYOUT.items() if k != "margin"},
-                height=420,
-                yaxis_title="Demand (MW)",
-                xaxis_title="Time (UTC)",
-                hovermode="x unified",
-                margin=dict(l=48, r=24, t=40, b=40),
-            )
-            st.plotly_chart(fig_live, use_container_width=True)
-
-        with c2:
-            st.markdown("##### Statewide")
-            fig_tot = go.Figure()
-            fig_tot.add_trace(
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        series = live[selected_zones]
+        fig_live = go.Figure()
+        palette = px.colors.sample_colorscale(
+            "Tealgrn", samplepoints=np.linspace(0.2, 0.95, len(selected_zones))
+        )
+        for i, zone in enumerate(selected_zones):
+            fig_live.add_trace(
                 go.Scatter(
-                    x=live.index,
-                    y=live["NYISO_TOTAL"],
-                    name="NYISO total",
-                    fill="tozeroy",
-                    line=dict(color=COLORS["live"], width=2),
-                    fillcolor="rgba(26,155,142,0.18)",
+                    x=series.index,
+                    y=series[zone],
+                    name=f"{ZONE_META[zone]['code']} {zone}",
+                    mode="lines",
+                    line=dict(width=1.6, color=palette[i]),
                 )
             )
-            fig_tot.update_layout(
-                **{k: v for k, v in PLOTLY_LAYOUT.items() if k != "margin"},
-                height=420,
-                yaxis_title="MW",
-                showlegend=False,
-                margin=dict(l=48, r=24, t=40, b=40),
+        fig_live.update_layout(
+            **{k: v for k, v in PLOTLY_LAYOUT.items() if k != "margin"},
+            height=420,
+            yaxis_title="Demand (MW)",
+            xaxis_title="Time (UTC)",
+            hovermode="x unified",
+            margin=dict(l=48, r=24, t=40, b=40),
+        )
+        st.plotly_chart(fig_live, use_container_width=True)
+
+    with c2:
+        st.markdown("##### Statewide")
+        fig_tot = go.Figure()
+        fig_tot.add_trace(
+            go.Scatter(
+                x=live.index,
+                y=live["NYISO_TOTAL"],
+                name="NYISO total",
+                fill="tozeroy",
+                line=dict(color=COLORS["live"], width=2),
+                fillcolor="rgba(26,155,142,0.18)",
             )
-            st.plotly_chart(fig_tot, use_container_width=True)
-
-        # KPIs for latest interval
-        latest = live.iloc[-1]
-        statewide_now = float(latest["NYISO_TOTAL"])
-        prev = float(live.iloc[-2]["NYISO_TOTAL"]) if len(live) > 1 else statewide_now
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Statewide now", f"{statewide_now:,.0f} MW", f"{statewide_now - prev:+,.0f} MW")
-        k2.metric("Peak (window)", f"{float(live['NYISO_TOTAL'].max()):,.0f} MW")
-        k3.metric("As of (UTC)", as_of.strftime("%Y-%m-%d %H:%M"))
-
-        st.markdown("##### Latest reading by zone")
-        latest_row = (
-            zones_now.sort_values("demand_mw", ascending=False)
-            .assign(updated=as_of.strftime("%Y-%m-%d %H:%M UTC"))
         )
-        st.dataframe(
-            latest_row[["code", "label", "demand_mw", "updated"]].rename(
-                columns={"code": "Zone", "label": "Name", "demand_mw": "MW", "updated": "Updated"}
-            ),
-            use_container_width=True,
-            hide_index=True,
-            column_config={"MW": st.column_config.NumberColumn(format="%.0f")},
+        fig_tot.update_layout(
+            **{k: v for k, v in PLOTLY_LAYOUT.items() if k != "margin"},
+            height=420,
+            yaxis_title="MW",
+            showlegend=False,
+            margin=dict(l=48, r=24, t=40, b=40),
+        )
+        st.plotly_chart(fig_tot, use_container_width=True)
+
+    # KPIs for latest interval
+    latest = live.iloc[-1]
+    statewide_now = float(latest["NYISO_TOTAL"])
+    prev = float(live.iloc[-2]["NYISO_TOTAL"]) if len(live) > 1 else statewide_now
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Statewide now", f"{statewide_now:,.0f} MW", f"{statewide_now - prev:+,.0f} MW")
+    k2.metric("Peak (window)", f"{float(live['NYISO_TOTAL'].max()):,.0f} MW")
+    k3.metric("As of (UTC)", as_of.strftime("%Y-%m-%d %H:%M"))
+
+    st.markdown("##### Latest reading by zone")
+    latest_row = (
+        zones_now.sort_values("demand_mw", ascending=False)
+        .assign(updated=as_of.strftime("%Y-%m-%d %H:%M UTC"))
+    )
+    st.dataframe(
+        latest_row[["code", "label", "demand_mw", "updated"]].rename(
+            columns={"code": "Zone", "label": "Name", "demand_mw": "MW", "updated": "Updated"}
+        ),
+        use_container_width=True,
+        hide_index=True,
+        column_config={"MW": st.column_config.NumberColumn(format="%.0f")},
+    )
+
+    # --- 5-day outlook from today (live-anchored seasonal naive) ---
+    st.markdown("---")
+    st.markdown("#### Next 5 days — outlook from now")
+    outlook = live_five_day_forecast(
+        zonal,
+        live_total_now=statewide_now,
+        as_of_iso=as_of.isoformat(),
+    )
+    if outlook.empty:
+        st.warning("Could not build a 5-day outlook from the demand archive.")
+    else:
+        st.caption(
+            "Hourly forecast for the next **5 days** starting from the latest live timestamp. "
+            "Built from a weekly seasonal profile in the NYISO archive, scaled to match "
+            f"**current statewide demand ({statewide_now:,.0f} MW)**. "
+            "This is a live operational outlook — for archived TFT day-ahead results, use the Forecasting tab."
         )
 
+        live_hourly = (
+            live["NYISO_TOTAL"]
+            .resample("h")
+            .mean()
+            .dropna()
+            .tail(24)
+        )
+        fig_out = go.Figure()
+        if not live_hourly.empty:
+            fig_out.add_trace(
+                go.Scatter(
+                    x=live_hourly.index,
+                    y=live_hourly.values,
+                    name="Live (last 24h)",
+                    mode="lines",
+                    line=dict(color=COLORS["live"], width=2.2),
+                )
+            )
+        fig_out.add_trace(
+            go.Scatter(
+                x=outlook.index,
+                y=outlook["NYISO_TOTAL"],
+                name="Forecast (5 days)",
+                mode="lines",
+                line=dict(color=COLORS["forecast"], width=2.4, dash="dash"),
+            )
+        )
+        for d in range(2, 6):
+            boundary = outlook.loc[outlook["day"] == d].index.min()
+            if pd.notna(boundary):
+                x = boundary.to_pydatetime()
+                fig_out.add_shape(
+                    type="line",
+                    x0=x,
+                    x1=x,
+                    y0=0,
+                    y1=1,
+                    yref="paper",
+                    line=dict(width=1, dash="dot", color=COLORS["muted"]),
+                )
+                fig_out.add_annotation(
+                    x=x,
+                    y=1,
+                    yref="paper",
+                    text=f"Day {d}",
+                    showarrow=False,
+                    xanchor="left",
+                    yanchor="bottom",
+                    font=dict(color=COLORS["muted"], size=11),
+                )
+        fig_out.update_layout(
+            **{k: v for k, v in PLOTLY_LAYOUT.items() if k != "margin"},
+            height=420,
+            yaxis_title="Demand (MW)",
+            xaxis_title="Time (UTC)",
+            hovermode="x unified",
+            margin=dict(l=48, r=24, t=40, b=40),
+        )
+        st.plotly_chart(fig_out, use_container_width=True)
 
-    # ---------------------------------------------------------------------------
-    # Forecasting — 24..120h horizon (selecting Nh includes 24h..Nh)
-    # ---------------------------------------------------------------------------
+        day_cards = st.columns(5)
+        for d, col in enumerate(day_cards, start=1):
+            block = outlook.loc[outlook["day"] == d, "NYISO_TOTAL"]
+            peak = float(block.max())
+            trough = float(block.min())
+            end_mw = float(block.iloc[-1])
+            end_ts = block.index[-1]
+            with col:
+                st.metric(
+                    f"Day {d} end",
+                    f"{end_mw:,.0f} MW",
+                    help=f"{end_ts.strftime('%Y-%m-%d %H:%M')} UTC · peak {peak:,.0f} · min {trough:,.0f}",
+                )
+                st.caption(f"Peak {peak:,.0f} · Min {trough:,.0f}")
+
+        out_table = pd.DataFrame(
+            {
+                "Time (UTC)": outlook.index.strftime("%Y-%m-%d %H:%M"),
+                "Day": outlook["day"],
+                "Predicted (MW)": outlook["NYISO_TOTAL"].round(1),
+            }
+        )
+        with st.expander("Hourly 5-day forecast table", expanded=False):
+            st.dataframe(
+                out_table,
+                use_container_width=True,
+                hide_index=True,
+                height=320,
+                column_config={
+                    "Predicted (MW)": st.column_config.NumberColumn(format="%.1f"),
+                },
+            )
+
+
+# ---------------------------------------------------------------------------
+# Forecasting — Day 1..5 lead day (single day at a time)
+# ---------------------------------------------------------------------------
 with tab_fc:
     st.markdown("#### Day-ahead forecasting")
     origin = forecast_origin(zonal)
@@ -856,12 +1027,12 @@ with tab_fc:
     c_horizon, c_scope = st.columns([2, 1])
     with c_horizon:
         day = st.radio(
-            "Forecast horizon",
+            "Forecast day",
             options=[1, 2, 3, 4, 5],
-            format_func=lambda d: f"{d * 24} hours",
+            format_func=lambda d: f"Day {d}",
             horizontal=True,
             index=0,
-            help="Selecting N hours shows the full window from 24 hours through N hours as one continuous series.",
+            help="Show actual vs predicted demand for that lead day only (Day 1 = first 24h ahead, Day 2 = next 24h, …).",
         )
     with c_scope:
         forecast_scope = st.selectbox(
@@ -877,46 +1048,44 @@ with tab_fc:
         )
 
     if _REAL is not None and not _REAL.empty:
-        if "sel_issue" not in st.session_state:
-            st.session_state["sel_issue"] = _SORTED_ISSUES[-1]
+        _min_issue, _max_issue = _SORTED_ISSUES[0], _SORTED_ISSUES[-1]
+        # date_input defaults to today when value= is omitted; today can be past max_value.
+        # Avoid key= here — Streamlit still validates the implicit today default against min/max.
+        _cur = st.session_state.get("sel_issue", _max_issue)
+        if isinstance(_cur, (list, tuple)):
+            _cur = _cur[0] if _cur else _max_issue
+        if not isinstance(_cur, date) or _cur < _min_issue or _cur > _max_issue:
+            _cur = _max_issue
         c_date, _pad = st.columns([1, 3])
         with c_date:
-            st.date_input(
+            _picked = st.date_input(
                 "Forecast date",
-                min_value=_SORTED_ISSUES[0],
-                max_value=_SORTED_ISSUES[-1],
-                key="sel_issue",
+                value=_cur,
+                min_value=_min_issue,
+                max_value=_max_issue,
                 help=f"{len(_SORTED_ISSUES)} forecast dates available, "
-                     f"{_SORTED_ISSUES[0]} to {_SORTED_ISSUES[-1]}.",
+                     f"{_min_issue} to {_max_issue}.",
             )
-        if st.session_state["sel_issue"] not in _ISSUE_SET:
+        st.session_state["sel_issue"] = _picked
+        if _picked not in _ISSUE_SET:
             st.caption("No forecast was issued on that date — showing the nearest earlier one.")
 
-    included_days = list(range(1, day + 1))
-    horizon_hours = day * 24
     actual_col, pred_col, scope_label = forecast_scope_columns(forecast_scope)
 
-    frames = []
-    for d in included_days:
-        target = day_mape.get(d, 3.5)
-        part = mock_day_predictions(zonal, d, target_mape=target)
-        if part.empty:
-            st.warning(f"Not enough archive history for {d * 24} hours.")
-            st.stop()
-        part = part.copy()
-        part["day"] = d
-        frames.append(part)
-
-    day_df = pd.concat(frames).sort_index()
+    target = day_mape.get(day, 3.5)
+    day_df = mock_day_predictions(zonal, day, target_mape=target)
+    if day_df.empty:
+        st.warning(f"Not enough archive history for Day {day}.")
+        st.stop()
+    day_df = day_df.copy()
+    day_df["day"] = day
     day_df["actual"] = day_df[actual_col]
     day_df["predicted"] = day_df[pred_col]
 
     window_start = day_df.index.min()
     window_end = day_df.index.max()
-    days_label = f"{horizon_hours} hours"
-    target_note = ", ".join(f"{d * 24}h≈{day_mape.get(d, 3.5):.2f}%" for d in included_days)
     st.caption(
-        f"**{days_label}** · **{scope_label}** · "
+        f"**Day {day}** · **{scope_label}** · "
         f"{window_start.strftime('%Y-%m-%d %H:%M')} → "
         f"{window_end.strftime('%Y-%m-%d %H:%M')} UTC · "
         f"forecast origin {origin.strftime('%Y-%m-%d')} · "
@@ -926,9 +1095,22 @@ with tab_fc:
     summary = day_summary(day_df, actual_col="actual", pred_col="predicted")
     forecast_peak = float(day_df["predicted"].max())
     forecast_min = float(day_df["predicted"].min())
+    # Point values at the end of the selected day (hour 24 of that lead day).
+    at_horizon = day_df.iloc[-1]
+    actual_at_h = float(at_horizon["actual"])
+    pred_at_h = float(at_horizon["predicted"])
+    horizon_ts = at_horizon.name
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Actual (avg)", f"{summary['actual_mw']:,.0f} MW")
-    m2.metric("Predicted (avg)", f"{summary['predicted_mw']:,.0f} MW")
+    m1.metric(
+        f"Actual (Day {day})",
+        f"{actual_at_h:,.0f} MW",
+        help=f"Actual demand at the end of Day {day} ({horizon_ts.strftime('%Y-%m-%d %H:%M')} UTC).",
+    )
+    m2.metric(
+        f"Predicted (Day {day})",
+        f"{pred_at_h:,.0f} MW",
+        help=f"Model prediction at the end of Day {day} ({horizon_ts.strftime('%Y-%m-%d %H:%M')} UTC).",
+    )
     m3.metric("Forecast Peak", f"{forecast_peak:,.0f} MW")
     m4.metric("Forecast Min", f"{forecast_min:,.0f} MW")
     m5.metric("Error %", f"{summary['error_pct']:.2f}%")
@@ -937,7 +1119,7 @@ with tab_fc:
         st.caption(
             f"This forecast date: **{summary['error_pct']:.2f}%**  ·  "
             f"model average across all {len(_SORTED_ISSUES)} forecast dates "
-            f"at this horizon: **{_ov.get(day, float('nan')):.2f}%**"
+            f"for Day {day}: **{_ov.get(day, float('nan')):.2f}%**"
         )
 
 
@@ -980,19 +1162,6 @@ with tab_fc:
                 line=dict(color=COLORS["forecast"], width=2.4, dash="dash"),
             )
         )
-        if len(included_days) > 1:
-            for d in included_days[1:]:
-                boundary = day_df.loc[day_df["day"] == d].index.min()
-                if pd.notna(boundary):
-                    fig_fc.add_vline(
-                        x=boundary.to_pydatetime(),
-                        line_width=1,
-                        line_dash="dot",
-                        line_color=COLORS["muted"],
-                        annotation_text=f"{d * 24}h",
-                        annotation_position="top left",
-                        annotation_font_color=COLORS["muted"],
-                    )
         fig_fc.update_layout(
             **{k: v for k, v in PLOTLY_LAYOUT.items() if k != "margin"},
             height=panel_height,
@@ -1004,7 +1173,7 @@ with tab_fc:
         st.plotly_chart(fig_fc, use_container_width=True)
 
     with table_col:
-        st.markdown(f"##### HOUR-BY-HOUR · {horizon_hours}h block")
+        st.markdown(f"##### HOUR-BY-HOUR · Day {day}")
         st.caption(f"{scope_label} · forecast vs actual")
         st.dataframe(
             hourly,
@@ -1019,12 +1188,12 @@ with tab_fc:
             },
         )
 
-    # --- Map: consumption for included days ---
+    # --- Map: consumption for selected day ---
     zone_df = zone_day_consumption(day_df)
     map_df = zone_df if forecast_scope == "Statewide" else zone_df[zone_df["zone"] == forecast_scope]
-    st.markdown("##### Zone demand on this forecast horizon")
+    st.markdown("##### Zone demand on this forecast day")
     st.caption(
-        f"Map is tied to the selected **{horizon_hours} hours** window"
+        f"Map is tied to **Day {day}**"
         + (
             " (all zones)."
             if forecast_scope == "Statewide"
