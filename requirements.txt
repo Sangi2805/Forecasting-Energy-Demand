@@ -27,5 +27,12 @@ streamlit>=1.58
 plotly>=5.20
 requests>=2.31
 
+# pandas 3.0 dropped pytz for stdlib zoneinfo, which reads the IANA database
+# from the OS rather than bundling it. Slim Linux containers have no
+# /usr/share/zoneinfo, so every tz_convert raises ZoneInfoNotFoundError. Not
+# needed on Windows, where pandas already pulls it in -- which is exactly why
+# this passed locally and failed in deployment.
+tzdata>=2025.1
+
 # Only used if the checkpoint is not present locally (slim-repo deployments).
 huggingface-hub>=0.25

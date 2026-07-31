@@ -39,9 +39,14 @@ class FeatureBuildError(RuntimeError):
 def build_calendar(index: pd.DatetimeIndex) -> pd.DataFrame:
     """Calendar features on the UTC backbone, derived from Eastern local time.
 
-    Verbatim from 03_zonal_features.ipynb:build_calendar.
+    Verbatim from 03_zonal_features.ipynb:build_calendar, except that the zone
+    is named America/New_York rather than US/Eastern. The two are the same zone
+    -- verified identical on hour, day-of-week, month, date and UTC offset over
+    all 122,712 hours from 2013 to 2026 -- but US/Eastern is a backward-compat
+    alias that trimmed tzdata builds may omit, and America/New_York is the
+    canonical name that is always present.
     """
-    local = index.tz_localize("UTC").tz_convert("US/Eastern")
+    local = index.tz_localize("UTC").tz_convert("America/New_York")
     cal = pd.DataFrame(index=index)
     cal["hour"] = local.hour
     cal["day_of_week"] = local.dayofweek
