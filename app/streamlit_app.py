@@ -1,14 +1,21 @@
-"""EnergyAI — NYISO demand dashboard (live P-58B + day-ahead forecasting)."""
+"""
+EnergyAI — NYISO zonal demand dashboard.
+
+Two tabs over the same zonal TFT checkpoint (refit2023+fx, 2.95% held-out MAPE):
+
+  Forecasting     banked predictions over the held-out test period, scored
+                  against realised demand.
+  Live forecast   the same model run now on NYISO palIntegrated load and
+                  Open-Meteo forecast weather, 120 hours ahead, alongside
+                  NYISO's own published forecast.
+"""
 
 from __future__ import annotations
 
 import json
 import sys
-from datetime import date, timedelta
-from io import StringIO
+from datetime import date
 from pathlib import Path
-from urllib.error import URLError, HTTPError
-from urllib.request import Request, urlopen
 
 import numpy as np
 import pandas as pd
@@ -26,8 +33,10 @@ from app import live_forecast as lfc  # noqa: E402  (needs the path fix above)
 # Paths & zone metadata
 # ---------------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[1]
-ZONAL_PATH = ROOT / "Sangar" / "nyiso_zonal_hourly.parquet"
-METRICS_PATH = ROOT / "Sangar" / "metrics_zonal_lr3e4.json"
+# The refit2023+fx metrics describe the checkpoint actually being served.
+# This previously pointed at metrics_zonal_lr3e4.json -- the superseded 3.196%
+# model -- so every quoted accuracy was for a checkpoint no longer in use.
+METRICS_PATH = ROOT / "Sangar" / "metrics_zonal_refit2023_fx.json"
 
 # Approximate load-zone centroids (NYISO A–K)
 ZONE_META = {
@@ -72,389 +81,132 @@ PLOTLY_LAYOUT = dict(
 
 
 # ---------------------------------------------------------------------------
-# Data helpers
-# ---------------------------------------------------------------------------
-@st.cache_data(show_spinner=False)
-def load_zonal() -> pd.DataFrame:
-    if not ZONAL_PATH.exists():
-        return pd.DataFrame()
-    df = pd.read_parquet(ZONAL_PATH)
-    if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.to_datetime(df.index, utc=True)
-    elif df.index.tz is None:
-        df.index = df.index.tz_localize("UTC")
-    else:
-        df.index = df.index.tz_convert("UTC")
-    df = df.sort_index()
-    return df
-
-
-def mock_live_window(zonal: pd.DataFrame, hours: int = 48, seed: int = 42) -> pd.DataFrame:
-    """Replay the most recent history as a near-real-time feed (timestamps shifted to now)."""
-    if zonal.empty:
-        return pd.DataFrame()
-    window = zonal.tail(hours).copy()
-    now = pd.Timestamp.now(tz="UTC").floor("h")
-    offset = now - window.index.max()
-    window.index = window.index + offset
-    rng = np.random.default_rng(seed + int(now.value // 1e12))
-    noise = 1.0 + rng.normal(0, 0.008, size=window.shape)
-    numeric = window.select_dtypes(include=[np.number])
-    window[numeric.columns] = (numeric * noise).clip(lower=0)
-    window["NYISO_TOTAL"] = window[ZONE_COLS].sum(axis=1)
-    return window
-
-
-def _nyiso_pal_url(day: date) -> str:
-    # P-58B Real-Time Actual Load (5-min), public MIS CSV — no auth
-    return f"http://mis.nyiso.com/public/csv/pal/{day.strftime('%Y%m%d')}pal.csv"
-
-
-def _fetch_nyiso_pal_day(day: date) -> pd.DataFrame:
-    req = Request(
-        _nyiso_pal_url(day),
-        headers={"User-Agent": "EnergyAI-dashboard/1.0"},
-    )
-    with urlopen(req, timeout=30) as resp:
-        raw = resp.read().decode("utf-8", errors="replace")
-    df = pd.read_csv(StringIO(raw))
-    if df.empty:
-        return pd.DataFrame()
-    df["Time Stamp"] = pd.to_datetime(df["Time Stamp"])
-    # NYISO stamps are US/Eastern wall time (EDT/EST in file)
-    df["utc"] = (
-        df["Time Stamp"]
-        .dt.tz_localize("America/New_York", ambiguous="infer", nonexistent="shift_forward")
-        .dt.tz_convert("UTC")
-    )
-    df = df[df["Name"].isin(ZONE_COLS)].copy()
-    wide = (
-        df.pivot_table(index="utc", columns="Name", values="Load", aggfunc="last")
-        .reindex(columns=ZONE_COLS)
-        .sort_index()
-    )
-    wide["NYISO_TOTAL"] = wide[ZONE_COLS].sum(axis=1, min_count=1)
-    return wide.dropna(how="all")
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def load_nyiso_live(hours: int = 48) -> tuple[pd.DataFrame, str]:
-    """
-    Pull NYISO P-58B real-time actual load (5-min zonal).
-    Returns (dataframe, source_label). Falls back to empty frame on failure.
-    """
-    today = date.today()
-    frames: list[pd.DataFrame] = []
-    errors: list[str] = []
-    for day in (today - timedelta(days=1), today):
-        try:
-            part = _fetch_nyiso_pal_day(day)
-            if not part.empty:
-                frames.append(part)
-        except (HTTPError, URLError, TimeoutError, ValueError, KeyError, OSError) as exc:
-            errors.append(f"{day}: {exc}")
-
-    if not frames:
-        return pd.DataFrame(), "error:" + (" | ".join(errors) if errors else "no data")
-
-    live = pd.concat(frames).sort_index()
-    live = live[~live.index.duplicated(keep="last")]
-    if hours > 0:
-        cutoff = live.index.max() - pd.Timedelta(hours=hours)
-        live = live.loc[live.index >= cutoff]
-    return live, "nyiso_p58b"
-
-
-def get_live_frame(zonal: pd.DataFrame, hours: int = 48) -> tuple[pd.DataFrame, str]:
-    live, source = load_nyiso_live(hours=hours)
-    if not live.empty and source.startswith("nyiso"):
-        return live, source
-    return mock_live_window(zonal, hours=hours), "mock"
-
-
-@st.cache_data(show_spinner=False)
-def load_day_mape() -> dict[int, float]:
-    """Reported per-day MAPE (%) from zonal TFT eval; used to calibrate mock preds."""
-    defaults = {1: 2.48, 2: 2.89, 3: 3.14, 4: 3.52, 5: 3.96}
-    if not METRICS_PATH.exists():
-        return defaults
-    try:
-        raw = json.loads(METRICS_PATH.read_text())
-        return {int(k): float(v) for k, v in raw.get("day_mape", {}).items()}
-    except Exception:
-        return defaults
-
-
-def forecast_origin(zonal: pd.DataFrame) -> pd.Timestamp:
-    """Start of the latest complete 5-day evaluation block (UTC day boundary)."""
-    last = zonal.index.max().floor("h")
-    # Need day-5 fully inside the archive: last midnight - 5 days
-    end_day = last.floor("D")
-    return end_day - pd.Timedelta(days=5)
-
-
-def day_slice(zonal: pd.DataFrame, day: int) -> pd.DataFrame:
-    """24 hourly rows for lead day 1..5 within the evaluation block."""
-    origin = forecast_origin(zonal)
-    start = origin + pd.Timedelta(days=day - 1)
-    end = start + pd.Timedelta(hours=23)
-    return zonal.loc[start:end].copy()
-
-
-def mock_day_predictions(
-    zonal: pd.DataFrame, day: int, target_mape: float, seed: int = 11
-) -> pd.DataFrame:
-    """
-    Build hourly actual + predicted demand for one lead day.
-
-    Predictions are seasonal-naive (lag 7d) then lightly calibrated so statewide
-    MAPE is near the model's reported day MAPE. No saved prediction parquet exists yet.
-    """
-    actual = day_slice(zonal, day)
-    if actual.empty or len(actual) < 20:
-        return pd.DataFrame()
-
-    cols = ZONE_COLS + ["NYISO_TOTAL"]
-    pred = actual[cols].copy()
-    for col in cols:
-        naive = zonal[col].shift(168).reindex(actual.index)
-        naive = naive.interpolate(limit_direction="both").bfill().ffill()
-        pred[col] = naive.to_numpy(dtype=float)
-
-    # Calibrate statewide series toward target MAPE (shrink naive errors + light noise)
-    rng = np.random.default_rng(seed + day * 17)
-    y = actual["NYISO_TOTAL"].to_numpy(dtype=float)
-    yhat = pred["NYISO_TOTAL"].to_numpy(dtype=float)
-    ape0 = float(np.mean(np.abs(y - yhat) / np.maximum(y, 1.0)) * 100)
-    scale = (target_mape / ape0) if ape0 > 1e-6 else 1.0
-    noise = rng.normal(0.0, 0.005, size=len(y))
-    yhat = y + (yhat - y) * scale + y * noise
-    pred["NYISO_TOTAL"] = np.clip(yhat, 0, None)
-
-    # Zone preds: same relative shape as naive, renormalized to calibrated total
-    zone_mat = pred[ZONE_COLS].to_numpy(dtype=float)
-    row_sums = zone_mat.sum(axis=1, keepdims=True)
-    row_sums = np.where(row_sums < 1e-6, 1.0, row_sums)
-    zone_mat = zone_mat / row_sums * pred["NYISO_TOTAL"].to_numpy()[:, None]
-    pred[ZONE_COLS] = zone_mat
-
-    out = actual[cols].copy()
-    out = out.rename(columns={c: f"actual_{c}" for c in cols})
-    for c in cols:
-        out[f"pred_{c}"] = pred[c].values
-    out["actual"] = out["actual_NYISO_TOTAL"]
-    out["predicted"] = out["pred_NYISO_TOTAL"]
-    return out
-
-
-def day_summary(day_df: pd.DataFrame, actual_col: str = "actual", pred_col: str = "predicted") -> dict[str, float]:
-    actual = day_df[actual_col]
-    predicted = day_df[pred_col]
-    mape = float(np.mean(np.abs(actual - predicted) / actual.clip(lower=1)) * 100)
-    accuracy = max(0.0, 100.0 - mape)
-    return {
-        "actual_mw": float(actual.mean()),
-        "predicted_mw": float(predicted.mean()),
-        "error_pct": mape,
-        "accuracy_pct": accuracy,
-        "actual_mwh": float(actual.sum()),
-        "predicted_mwh": float(predicted.sum()),
-    }
-
-
-def predictions_for_calendar_day(
-    zonal: pd.DataFrame,
-    day_start: pd.Timestamp,
-    target_mape: float,
-    seed: int = 11,
-) -> pd.DataFrame:
-    """
-    Day-ahead mock forecast for one UTC calendar day (24h).
-    Same seasonal-naive + MAPE calibration used in the Forecasting tab.
-    """
-    day_start = pd.Timestamp(day_start).tz_convert("UTC").floor("D")
-    end = day_start + pd.Timedelta(hours=23)
-    actual = zonal.loc[day_start:end].copy()
-    if actual.empty or len(actual) < 20:
-        return pd.DataFrame()
-
-    cols = ZONE_COLS + ["NYISO_TOTAL"]
-    pred = actual[cols].copy()
-    for col in cols:
-        naive = zonal[col].shift(168).reindex(actual.index)
-        naive = naive.interpolate(limit_direction="both").bfill().ffill()
-        pred[col] = naive.to_numpy(dtype=float)
-
-    day_seed = int(day_start.strftime("%Y%m%d"))
-    rng = np.random.default_rng(seed + day_seed)
-    y = actual["NYISO_TOTAL"].to_numpy(dtype=float)
-    yhat = pred["NYISO_TOTAL"].to_numpy(dtype=float)
-    ape0 = float(np.mean(np.abs(y - yhat) / np.maximum(y, 1.0)) * 100)
-    scale = (target_mape / ape0) if ape0 > 1e-6 else 1.0
-    noise = rng.normal(0.0, 0.005, size=len(y))
-    yhat = y + (yhat - y) * scale + y * noise
-    pred["NYISO_TOTAL"] = np.clip(yhat, 0, None)
-
-    zone_mat = pred[ZONE_COLS].to_numpy(dtype=float)
-    row_sums = zone_mat.sum(axis=1, keepdims=True)
-    row_sums = np.where(row_sums < 1e-6, 1.0, row_sums)
-    zone_mat = zone_mat / row_sums * pred["NYISO_TOTAL"].to_numpy()[:, None]
-    pred[ZONE_COLS] = zone_mat
-
-    out = actual[cols].copy()
-    out = out.rename(columns={c: f"actual_{c}" for c in cols})
-    for c in cols:
-        out[f"pred_{c}"] = pred[c].values
-    out["actual"] = out["actual_NYISO_TOTAL"]
-    out["predicted"] = out["pred_NYISO_TOTAL"]
-    return out
-
-
-
-# ---------------------------------------------------------------------------
-# Real model predictions (zonal TFT). Overrides the placeholder generators
-# above; falls back to them automatically if the parquet is absent.
+# Banked model predictions (held-out test period)
+#
+# One definition per function. This region previously held seasonal-naive mock
+# generators that were then redefined twice at import time by real-data
+# overrides, so which implementation ran depended on definition order rather
+# than anything explicit. The predictions parquet ships with the repo, so the
+# placeholders had nothing left to fall back for.
 # ---------------------------------------------------------------------------
 PRED_PATH = ROOT / "reports" / "tft_hourly_predictions.parquet"
 
 
 @st.cache_data(show_spinner=False)
-def load_real_predictions():
+def load_predictions() -> pd.DataFrame:
+    """Banked zonal TFT predictions, pivoted wide with a statewide total."""
     if not PRED_PATH.exists():
-        return None
+        return pd.DataFrame()
     df = pd.read_parquet(PRED_PATH)
     df["issue_date"] = pd.to_datetime(df["issue_date"]).dt.date
     ts = pd.to_datetime(df["ts_utc"])
     df["ts_utc"] = ts.dt.tz_localize("UTC") if ts.dt.tz is None else ts.dt.tz_convert("UTC")
+
     idx = ["issue_date", "lead_day", "ts_utc"]
-    p = df.pivot_table(index=idx, columns="zone", values="pred_mw", aggfunc="mean")
-    a = df.pivot_table(index=idx, columns="zone", values="actual_mw", aggfunc="mean")
-    zones = [z for z in ZONE_COLS if z in p.columns]
-    p, a = p[zones].copy(), a[zones].copy()
-    p["NYISO_TOTAL"] = p.sum(axis=1)
-    a["NYISO_TOTAL"] = a.sum(axis=1)
-    p.columns = [f"pred_{c}" for c in p.columns]
-    a.columns = [f"actual_{c}" for c in a.columns]
-    out = a.join(p).reset_index()
+    pred = df.pivot_table(index=idx, columns="zone", values="pred_mw", aggfunc="mean")
+    actual = df.pivot_table(index=idx, columns="zone", values="actual_mw", aggfunc="mean")
+    zones = [z for z in ZONE_COLS if z in pred.columns]
+    pred, actual = pred[zones].copy(), actual[zones].copy()
+    pred["NYISO_TOTAL"] = pred.sum(axis=1)
+    actual["NYISO_TOTAL"] = actual.sum(axis=1)
+    pred.columns = [f"pred_{c}" for c in pred.columns]
+    actual.columns = [f"actual_{c}" for c in actual.columns]
+
+    out = actual.join(pred).reset_index()
     out["actual"] = out["actual_NYISO_TOTAL"]
     out["predicted"] = out["pred_NYISO_TOTAL"]
     return out
 
 
-_REAL = load_real_predictions()
-
-if _REAL is not None and not _REAL.empty:
-    _counts = _REAL.groupby("issue_date")["lead_day"].nunique()
-    _FULL = _counts[_counts >= 5]
-    _LATEST = _FULL.index.max() if len(_FULL) else _REAL["issue_date"].max()
-
-    def _real_block(issue, lead):
-        g = _REAL[(_REAL["issue_date"] == issue) & (_REAL["lead_day"] == lead)]
-        if g.empty:
-            return pd.DataFrame()
-        return (g.set_index("ts_utc")
-                 .drop(columns=["issue_date", "lead_day"])
-                 .sort_index())
-
-    def forecast_origin(zonal: pd.DataFrame) -> pd.Timestamp:
-        g = _REAL[(_REAL["issue_date"] == _LATEST) & (_REAL["lead_day"] == 1)]
-        return g["ts_utc"].min()
-
-    def mock_day_predictions(zonal, day, target_mape=None, seed=11):
-        return _real_block(_LATEST, int(day))
-
-    def predictions_for_calendar_day(zonal, day_start, target_mape=None, seed=11):
-        return _real_block(pd.Timestamp(day_start).date(), 1)
-
-
-
-if _REAL is not None and not _REAL.empty:
-    _SORTED_ISSUES = sorted(_REAL["issue_date"].unique())
-    _ISSUE_SET = set(_SORTED_ISSUES)
-
-    def _selected_issue():
-        want = st.session_state.get("sel_issue", _LATEST)
-        if want in _ISSUE_SET:
-            return want
-        earlier = [d for d in _SORTED_ISSUES if d <= want]
-        return earlier[-1] if earlier else _SORTED_ISSUES[0]
-
-    def forecast_origin(zonal: pd.DataFrame) -> pd.Timestamp:
-        g = _REAL[(_REAL["issue_date"] == _selected_issue()) & (_REAL["lead_day"] == 1)]
-        return g["ts_utc"].min()
-
-    def mock_day_predictions(zonal, day, target_mape=None, seed=11):
-        return _real_block(_selected_issue(), int(day))
-
-    @st.cache_data(show_spinner=False)
-    def real_overall_mape():
-        out = {}
-        for n in range(1, 6):
-            g = _REAL[_REAL["lead_day"] <= n]
-            a = g["actual_NYISO_TOTAL"].to_numpy(dtype=float)
-            p = g["pred_NYISO_TOTAL"].to_numpy(dtype=float)
-            out[n] = float(np.mean(np.abs(a - p) / np.maximum(a, 1.0)) * 100)
-        return out
-
-
-def score_day_frame(day_df: pd.DataFrame) -> dict[str, float | str]:
-    """Peak / wMAPE / peak-APE scorecard for one completed forecast day."""
-    actual = day_df["actual"]
-    predicted = day_df["predicted"]
-    wmape = float(np.sum(np.abs(actual - predicted)) / np.maximum(actual.sum(), 1.0) * 100)
-    mape = float(np.mean(np.abs(actual - predicted) / actual.clip(lower=1)) * 100)
-    a_peak = float(actual.max())
-    p_peak = float(predicted.max())
-    peak_ape = abs(p_peak - a_peak) / max(a_peak, 1.0) * 100
-    a_peak_ts = actual.idxmax()
-    p_peak_ts = predicted.idxmax()
+@st.cache_data(show_spinner=False)
+def model_metrics() -> dict:
+    """Held-out scores for the checkpoint actually being served."""
+    try:
+        raw = json.loads(METRICS_PATH.read_text())
+    except (OSError, ValueError):
+        return {"day_mape": {}, "overall_mape": float("nan"), "seasonal_mape": {}}
     return {
-        "wmape": wmape,
-        "mape": mape,
-        "accuracy": max(0.0, 100.0 - wmape),
-        "actual_peak_mw": a_peak,
-        "predicted_peak_mw": p_peak,
-        "peak_ape": peak_ape,
-        "actual_peak_hour": a_peak_ts.strftime("%H:%M"),
-        "predicted_peak_hour": p_peak_ts.strftime("%H:%M"),
-        "actual_avg_mw": float(actual.mean()),
-        "predicted_avg_mw": float(predicted.mean()),
+        "day_mape": {int(k): float(v) for k, v in raw.get("day_mape", {}).items()},
+        "overall_mape": raw.get("overall_mape", float("nan")),
+        "seasonal_mape": raw.get("seasonal_mape", {}),
+        "checkpoint": raw.get("checkpoint", ""),
     }
 
 
-@st.cache_data(show_spinner=False)
-def build_track_record(_zonal_mtime: float, n_days: int = 45) -> pd.DataFrame:
-    """
-    Score the last N complete UTC days: day-ahead mock vs archive actuals.
-    Returns one row per day (newest first).
-    """
-    zonal = load_zonal()
-    day_mape = load_day_mape()
-    target = float(day_mape.get(1, 2.48))
-    last = zonal.index.max().floor("h")
-    # Prefer complete days only (exclude partial last day if incomplete)
-    end_day = last.floor("D")
-    if last.hour < 23:
-        end_day = end_day - pd.Timedelta(days=1)
+PREDICTIONS = load_predictions()
+if PREDICTIONS.empty:
+    st.error(
+        f"Prediction archive not found at `{PRED_PATH}`. The Forecasting tab "
+        "reads banked zonal TFT output; regenerate it with "
+        "`Sangar/09_hourly_predictions.ipynb`."
+    )
+    st.stop()
 
-    rows: list[dict] = []
-    for i in range(n_days):
-        day_start = end_day - pd.Timedelta(days=i)
-        day_df = predictions_for_calendar_day(zonal, day_start, target_mape=target)
-        if day_df.empty or len(day_df) < 20:
-            continue
-        sc = score_day_frame(day_df)
-        rows.append(
-            {
-                "date": day_start.strftime("%Y-%m-%d"),
-                "date_ts": day_start,
-                **sc,
-            }
-        )
-    if not rows:
+ISSUE_DATES = sorted(PREDICTIONS["issue_date"].unique())
+ISSUE_SET = set(ISSUE_DATES)
+_full = PREDICTIONS.groupby("issue_date")["lead_day"].nunique()
+_full = _full[_full >= 5]
+LATEST_ISSUE = _full.index.max() if len(_full) else ISSUE_DATES[-1]
+
+
+def selected_issue() -> date:
+    """Issue date chosen in the Forecasting tab, snapped to one that exists."""
+    want = st.session_state.get("sel_issue", LATEST_ISSUE)
+    if want in ISSUE_SET:
+        return want
+    earlier = [d for d in ISSUE_DATES if d <= want]
+    return earlier[-1] if earlier else ISSUE_DATES[0]
+
+
+def day_block(day: int, issue: date | None = None) -> pd.DataFrame:
+    """The 24 hourly rows of one lead day within one issued forecast."""
+    issue = selected_issue() if issue is None else issue
+    g = PREDICTIONS[
+        (PREDICTIONS["issue_date"] == issue) & (PREDICTIONS["lead_day"] == int(day))
+    ]
+    if g.empty:
         return pd.DataFrame()
-    return pd.DataFrame(rows).sort_values("date_ts", ascending=False).reset_index(drop=True)
+    return (g.set_index("ts_utc")
+             .drop(columns=["issue_date", "lead_day"])
+             .sort_index())
 
+
+def forecast_origin() -> pd.Timestamp:
+    """First forecast hour of the selected issue."""
+    g = PREDICTIONS[
+        (PREDICTIONS["issue_date"] == selected_issue()) & (PREDICTIONS["lead_day"] == 1)
+    ]
+    return g["ts_utc"].min()
+
+
+@st.cache_data(show_spinner=False)
+def mape_by_lead() -> dict[int, float]:
+    """
+    Statewide MAPE per lead day across every issued forecast.
+
+    Scored on lead_day == n, not lead_day <= n. The cumulative form compared a
+    single-day figure against a 1..n average, which flattered later horizons.
+    """
+    out = {}
+    for n in range(1, 6):
+        g = PREDICTIONS[PREDICTIONS["lead_day"] == n]
+        a = g["actual_NYISO_TOTAL"].to_numpy(dtype=float)
+        p = g["pred_NYISO_TOTAL"].to_numpy(dtype=float)
+        out[n] = float(np.mean(np.abs(a - p) / np.maximum(a, 1.0)) * 100)
+    return out
+
+
+def day_summary(day_df: pd.DataFrame, actual_col: str = "actual",
+                pred_col: str = "predicted") -> dict[str, float]:
+    actual, predicted = day_df[actual_col], day_df[pred_col]
+    mape = float(np.mean(np.abs(actual - predicted) / actual.clip(lower=1)) * 100)
+    return {
+        "actual_mw": float(actual.mean()),
+        "predicted_mw": float(predicted.mean()),
+        "error_pct": mape,
+        "actual_mwh": float(actual.sum()),
+        "predicted_mwh": float(predicted.sum()),
+    }
 
 def forecast_scope_columns(scope: str) -> tuple[str, str, str]:
     """Return (actual_col, pred_col, display_label) for Statewide or a zone."""
@@ -492,26 +244,6 @@ def zone_day_consumption(day_df: pd.DataFrame) -> pd.DataFrame:
         )
     out = pd.DataFrame(rows)
     out["share_pct"] = 100 * out["actual_mwh"] / out["actual_mwh"].sum()
-    return out
-
-
-def zone_snapshot(live: pd.DataFrame) -> pd.DataFrame:
-    latest = live.iloc[-1]
-    rows = []
-    for zone, meta in ZONE_META.items():
-        mw = float(latest[zone])
-        rows.append(
-            {
-                "zone": zone,
-                "code": meta["code"],
-                "label": meta["label"],
-                "lat": meta["lat"],
-                "lon": meta["lon"],
-                "demand_mw": mw,
-            }
-        )
-    out = pd.DataFrame(rows)
-    out["share_pct"] = 100 * out["demand_mw"] / out["demand_mw"].sum()
     return out
 
 
@@ -714,19 +446,18 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-zonal = load_zonal()
-if zonal.empty:
-    st.error(f"Zonal demand file not found at `{ZONAL_PATH}`.")
-    st.stop()
-
-day_mape = load_day_mape()
-selected_zones = ZONE_COLS
+METRICS = model_metrics()
+day_mape = METRICS["day_mape"]
 
 # No sidebar. It held a Deploy link pointing at the wrong repository, plus
 # archive metadata now carried by each tab's own caption; dropping it also
 # removes the collapse chevron, which has nothing left to toggle.
-ARCHIVE_RANGE = (
-    f"{zonal.index.min():%Y-%m-%d} → {zonal.index.max():%Y-%m-%d}, "
+#
+# Coverage describes the prediction archive rather than the raw demand archive:
+# it is what the Forecasting tab can actually show, and it saves loading an
+# 8.8 MB parquet at startup purely to render a date range.
+COVERAGE_NOTE = (
+    f"{ISSUE_DATES[0]} → {ISSUE_DATES[-1]}, {len(ISSUE_DATES)} issued forecasts, "
     f"11 NYISO load zones (A–K)"
 )
 
@@ -756,7 +487,7 @@ st.markdown(
 tab_fc, tab_live = st.tabs(["Forecasting", "Live forecast"])
 with tab_fc:
     st.markdown("#### Day-ahead forecasting")
-    origin = forecast_origin(zonal)
+    origin = forecast_origin()
 
     scope_options = ["Statewide"] + ZONE_COLS
     c_horizon, c_scope = st.columns([2, 1])
@@ -783,21 +514,20 @@ with tab_fc:
             help="Statewide = NYISO total. Otherwise metrics and chart use the selected load zone.",
         )
 
-    if _REAL is not None and not _REAL.empty:
-        if "sel_issue" not in st.session_state:
-            st.session_state["sel_issue"] = _SORTED_ISSUES[-1]
-        c_date, _pad = st.columns([1, 3])
-        with c_date:
-            st.date_input(
-                "Forecast date",
-                min_value=_SORTED_ISSUES[0],
-                max_value=_SORTED_ISSUES[-1],
-                key="sel_issue",
-                help=f"{len(_SORTED_ISSUES)} forecast dates available, "
-                     f"{_SORTED_ISSUES[0]} to {_SORTED_ISSUES[-1]}.",
-            )
-        if st.session_state["sel_issue"] not in _ISSUE_SET:
-            st.caption("No forecast was issued on that date — showing the nearest earlier one.")
+    if "sel_issue" not in st.session_state:
+        st.session_state["sel_issue"] = LATEST_ISSUE
+    c_date, _pad = st.columns([1, 3])
+    with c_date:
+        st.date_input(
+            "Forecast date",
+            min_value=ISSUE_DATES[0],
+            max_value=ISSUE_DATES[-1],
+            key="sel_issue",
+            help=f"{len(ISSUE_DATES)} forecast dates available, "
+                 f"{ISSUE_DATES[0]} to {ISSUE_DATES[-1]}.",
+        )
+    if st.session_state["sel_issue"] not in ISSUE_SET:
+        st.caption("No forecast was issued on that date — showing the nearest earlier one.")
 
     # Day N means day N alone -- the 24 hours of that lead day. It used to
     # accumulate days 1..N into one series, so every metric, the chart and the
@@ -805,7 +535,7 @@ with tab_fc:
     horizon_hours = 24
     actual_col, pred_col, scope_label = forecast_scope_columns(forecast_scope)
 
-    day_df = mock_day_predictions(zonal, day, target_mape=day_mape.get(day, 3.5))
+    day_df = day_block(day)
     if day_df.empty:
         st.warning(f"No forecast available for Day {day} on that issue date.")
         st.stop()
@@ -823,7 +553,7 @@ with tab_fc:
         f"({window_start.strftime('%H:%M')} → {window_end.strftime('%H:%M')} UTC) · "
         f"forecast issued {origin.strftime('%Y-%m-%d')} · "
         f"predictions from the trained zonal TFT model · "
-        f"archive {ARCHIVE_RANGE}"
+        f"archive {COVERAGE_NOTE}"
     )
 
     summary = day_summary(day_df, actual_col="actual", pred_col="predicted")
@@ -843,12 +573,12 @@ with tab_fc:
               help=f"Mean absolute percentage error (MAPE) across Day {day}'s "
                    f"24 hours: the average of |predicted − actual| ÷ actual, "
                    f"hour by hour.")
-    _ov = real_overall_mape() if (_REAL is not None and not _REAL.empty) else {}
-    if _ov and forecast_scope == "Statewide":
+    if forecast_scope == "Statewide":
         st.caption(
             f"This forecast date: **{summary['error_pct']:.2f}%**  ·  "
-            f"model average across all {len(_SORTED_ISSUES)} forecast dates "
-            f"at this horizon: **{_ov.get(day, float('nan')):.2f}%**"
+            f"model average for Day {day} across all {len(ISSUE_DATES)} issued "
+            f"forecasts: **{mape_by_lead().get(day, float('nan')):.2f}%**  ·  "
+            f"held-out eval: **{day_mape.get(day, float('nan')):.2f}%**"
         )
 
 

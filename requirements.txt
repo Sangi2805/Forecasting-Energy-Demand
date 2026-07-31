@@ -1,5 +1,23 @@
-streamlit
-plotly
-pandas
-numpy
-pyarrow
+# Pinned to the environment the refit2023+fx checkpoint was trained in (CAIR,
+# Python 3.12.9). pytorch-forecasting serialises the GroupNormalizer into the
+# checkpoint, so a major-version drift there stops it loading at all.
+#
+# The CPU wheel is requested explicitly: plain `torch` on Linux pulls the CUDA
+# build and ~2 GB of nvidia-* dependencies a CPU-only deployment never uses.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.7.1+cpu
+pytorch-forecasting==1.8.0
+lightning==2.6.5
+pytorch-lightning==2.6.5
+torchmetrics==1.9.0
+
+numpy==2.3.3
+pandas==2.3.2
+scikit-learn==1.7.2
+scipy==1.16.1
+pyarrow==25.0.0
+
+streamlit==1.58.0
+plotly>=5.20
+requests>=2.31
