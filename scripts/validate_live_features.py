@@ -1,4 +1,4 @@
-﻿"""
+"""
 Phase 2 gate. Two questions, neither taken on trust.
 
 TEST A -- does the live feature builder reproduce the training features?
