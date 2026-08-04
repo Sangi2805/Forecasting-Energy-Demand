@@ -268,6 +268,47 @@ def to_et(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
     return idx.tz_convert(ET)
 
 
+def live_day_mape(live_meta: dict, day: int) -> float:
+    """Held-out MAPE at lead day `day`, from the cached run's metadata.
+
+    JSON object keys are always strings, so `day_mape` comes back off disk keyed
+    "1".."5". Looking it up with an int missed every time and rendered "nan%".
+    Accepts either keying so an older cache file still resolves.
+    """
+    dm = (live_meta.get("model") or {}).get("day_mape") or {}
+    val = dm.get(day, dm.get(str(day)))
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def live_window(origin: pd.Timestamp, day: int) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """First and last UTC hour of lead day `day` of the live forecast.
+
+    A lead day is the Nth rolling 24h block after the origin hour, which is when
+    the forecast was issued -- not a calendar day. An origin at 21:00 ET makes
+    Day 1 run 21:00 through 20:00 the following day, so labelling the block with
+    a single date reads as though the forecast covered a day that is nearly over.
+    Callers label it with `window_label` instead.
+    """
+    start = origin + pd.Timedelta(days=day - 1)
+    return start, start + pd.Timedelta(hours=23)
+
+
+def window_label(win_start: pd.Timestamp, win_end: pd.Timestamp,
+                 *, short: bool = False) -> str:
+    """Eastern-time span of a lead-day block, e.g.
+    `Mon 03 Aug 21:00 → Tue 04 Aug 20:00 ET`. Collapses to a single date when
+    the block happens to align with a calendar day (origin issued at midnight)."""
+    a, b = to_et([win_start, win_end])
+    if a.date() == b.date():
+        return f"{a:%a %d %b} {a:%H:%M}–{b:%H:%M} ET"
+    if short:
+        return f"{a:%d %b %H:%M} → {b:%d %b %H:%M} ET"
+    return f"{a:%a %d %b %H:%M} → {b:%a %d %b %H:%M} ET"
+
+
 def humanise_age(seconds: float | None) -> str:
     if seconds is None:
         return "never"
@@ -713,8 +754,9 @@ with tab_fc:
 
 # ---------------------------------------------------------------------------
 # Live forecast — next 120h from live NYISO + Open-Meteo, laid out like the
-# Forecasting tab: pick a lead day and target date, then compare our model
-# against NYISO's own published forecast.
+# Forecasting tab: pick a lead day -- here a rolling 24h block after the issue
+# hour, not a calendar day -- then compare our model against NYISO's own
+# published forecast.
 # ---------------------------------------------------------------------------
 with tab_live:
     live_df, live_meta = lfc.load_cached()
@@ -784,31 +826,15 @@ with tab_live:
             st.stop()
 
     origin_utc = pd.Timestamp(live_meta["origin"])
-    # Lead day N covers the Nth 24h block after the origin. The date picker and
-    # the radio are two views of the same choice, so they stay in sync.
-    day_dates = [
-        (origin_utc + pd.Timedelta(days=d - 1)).date() for d in range(1, 6)
-    ]
+    # Lead day N is the Nth rolling 24h block after the origin hour, so a block
+    # normally straddles two calendar dates. Each option carries its own Eastern
+    # span; there is no single "target date" to pick from.
+    day_windows = {d: live_window(origin_utc, d) for d in range(1, 6)}
 
-    # Lead day and target date are two views of one choice, kept in sync both
-    # ways. Clamped on every run so a cache refresh (which shifts the origin)
-    # cannot leave a stale date selected.
-    if st.session_state.get("live_day") not in (1, 2, 3, 4, 5):
+    if st.session_state.get("live_day") not in day_windows:
         st.session_state["live_day"] = 1
-    if st.session_state.get("live_date") not in day_dates:
-        st.session_state["live_date"] = day_dates[st.session_state["live_day"] - 1]
 
-    def _sync_from_day() -> None:
-        st.session_state["live_date"] = day_dates[st.session_state["live_day"] - 1]
-
-    def _sync_from_date() -> None:
-        picked = st.session_state["live_date"]
-        if picked in day_dates:
-            st.session_state["live_day"] = day_dates.index(picked) + 1
-        else:  # outside the forecast window: snap back to the current day
-            st.session_state["live_date"] = day_dates[st.session_state["live_day"] - 1]
-
-    c_day, c_date, c_scope = st.columns([2, 1, 1])
+    c_day, c_scope = st.columns([3, 1])
     with c_day:
         st.radio(
             "Forecast horizon",
@@ -816,19 +842,9 @@ with tab_live:
             format_func=lambda d: f"Day {d}",
             horizontal=True,
             key="live_day",
-            on_change=_sync_from_day,
-            help="Lead day within the forecast issued now. Day 1 is the next "
-                 "24 hours, Day 5 the fifth.",
-        )
-    with c_date:
-        st.date_input(
-            "Target date",
-            min_value=day_dates[0],
-            max_value=day_dates[-1],
-            key="live_date",
-            on_change=_sync_from_date,
-            help="The five dates this forecast covers. Picking one selects the "
-                 "matching lead day, and vice versa.",
+            help="Lead day within the forecast issued now. Day 1 is the 24 "
+                 "hours after the issue hour, Day 5 the fifth such block. These "
+                 "are rolling 24h windows from the issue time, not calendar days.",
         )
     live_day = st.session_state["live_day"]
     with c_scope:
@@ -847,8 +863,9 @@ with tab_live:
                         else f"{ZONE_META[live_scope]['code']} — {ZONE_META[live_scope]['label']}")
 
     series = live_scope_frame(live_df, live_scope)
-    win_start = origin_utc + pd.Timedelta(days=live_day - 1)
-    win_end = win_start + pd.Timedelta(hours=23)
+    win_start, win_end = day_windows[live_day]
+    win_label = window_label(win_start, win_end)
+    win_label_short = window_label(win_start, win_end, short=True)
     block = series.loc[win_start:win_end]
     if block.empty or block["pred_mw"].isna().all():
         st.warning(f"No forecast hours available for Day {live_day}.")
@@ -857,13 +874,15 @@ with tab_live:
     has_nyiso = "nyiso_mw" in block.columns and block["nyiso_mw"].notna().any()
     nyiso_issue = live_meta.get("nyiso_issue")
 
+    # A missing score drops the clause rather than printing "nan%" -- the run
+    # is still valid, only the metadata is incomplete.
+    day_mape_live = live_day_mape(live_meta, live_day)
     st.caption(
         f"**Day {live_day}** · **{scope_label_live}** · "
-        f"target date **{to_et([win_start])[0]:%a %d %b %Y}** · "
+        f"covers **{win_label}** · "
         f"forecast issued **{to_et([origin_utc])[0]:%d %b %H:%M} ET** · "
-        f"zonal TFT, held-out MAPE "
-        f"{(live_meta.get('model', {}).get('day_mape') or {}).get(live_day, float('nan')):.2f}% "
-        f"at this horizon"
+        + (f"zonal TFT, held-out MAPE {day_mape_live:.2f}% at this horizon"
+           if day_mape_live == day_mape_live else "zonal TFT")
     )
 
     (sub_main,) = st.tabs(["Our prediction vs NYISO prediction"])
@@ -882,10 +901,10 @@ with tab_live:
                        f"there is no actual to compare against.")
         c2.metric("Forecast Peak", f"{ours.max():,.0f} MW",
                   help=f"Our highest forecast hour on Day {live_day}, at "
-                       f"{to_et([o_peak_ts])[0]:%H:%M} ET.")
+                       f"{to_et([o_peak_ts])[0]:%d %b %H:%M} ET.")
         c3.metric("Forecast Min", f"{ours.min():,.0f} MW",
                   help=f"Our lowest forecast hour on Day {live_day}, at "
-                       f"{to_et([o_min_ts])[0]:%H:%M} ET.")
+                       f"{to_et([o_min_ts])[0]:%d %b %H:%M} ET.")
 
         # --- NYISO forecast: cards, same shape, directly below -------------
         if has_nyiso:
@@ -897,10 +916,10 @@ with tab_live:
                            f"(isolf, issue {nyiso_issue}).")
             n2.metric("NYISO Peak", f"{theirs.max():,.0f} MW",
                       help=f"NYISO's highest forecast hour on Day {live_day}, at "
-                           f"{to_et([n_peak_ts])[0]:%H:%M} ET.")
+                           f"{to_et([n_peak_ts])[0]:%d %b %H:%M} ET.")
             n3.metric("NYISO Min", f"{theirs.min():,.0f} MW",
                       help=f"NYISO's lowest forecast hour on Day {live_day}, at "
-                           f"{to_et([n_min_ts])[0]:%H:%M} ET.")
+                           f"{to_et([n_min_ts])[0]:%d %b %H:%M} ET.")
         else:
             reason = live_meta.get("nyiso_error")
             if reason is None and "nyiso_mw" not in live_df.columns:
@@ -916,7 +935,7 @@ with tab_live:
         compare = " vs NYISO forecast" if has_nyiso else ""
         st.markdown(
             f"##### {scope_label_live} hourly demand — our forecast{compare}, "
-            f"Day {live_day} ({to_et([win_start])[0]:%a %d %b})"
+            f"Day {live_day} ({win_label_short})"
         )
 
         chart_col, table_col = st.columns([1.15, 1], gap="large")
@@ -954,9 +973,11 @@ with tab_live:
                 f"##### HOUR-BY-HOUR · Day {live_day}"
                 + (" · ours vs NYISO" if has_nyiso else "")
             )
-            st.caption(f"{scope_label_live} · {to_et([win_start])[0]:%a %d %b %Y}")
+            st.caption(f"{scope_label_live} · {win_label}")
+            # A rolling block straddles midnight, so the date has to be on every
+            # row -- a bare "01:00" would be unreadable next to "23:00" above it.
             cols = {
-                "Time (ET)": x.strftime("%H:%M"),
+                "Time (ET)": x.strftime("%d %b %H:%M"),
                 "Ours (MW)": ours.round(0),
                 "P10 (MW)": block["pred_lo"].round(0),
                 "P90 (MW)": block["pred_hi"].round(0),
@@ -1018,7 +1039,7 @@ with tab_live:
 
             st.markdown(
                 f"##### Our forecast energy by zone — Day {live_day} "
-                f"({to_et([win_start])[0]:%a %d %b})"
+                f"({win_label_short})"
             )
             st.caption(
                 f"Our forecast over **Day {live_day}** only"
@@ -1049,14 +1070,22 @@ with tab_live:
     with st.expander("Run details"):
         t = live_meta.get("timings_s", {})
         m = live_meta.get("model", {})
+        # `x == x` is False only for NaN, which covers both a missing key and a
+        # value that came back unparseable -- neither should render as "nan%".
+        try:
+            overall = float(m.get("overall_mape"))
+        except (TypeError, ValueError):
+            overall = float("nan")
+        day1 = live_day_mape(live_meta, 1)
+        overall_txt = f"{overall:.2f}% overall" if overall == overall else "n/a"
+        day1_txt = f" · {day1:.2f}% at 24h" if day1 == day1 else ""
         st.markdown(
             f"""
 - **Forecast origin** {to_et([origin_utc])[0]:%Y-%m-%d %H:%M} ET  ({origin_utc:%Y-%m-%d %H:%M} UTC)
 - **Encoder** {live_meta['encoder_hours']}h of realised load ·
   **Horizon** {live_meta['horizon_hours']}h · **Zones** {live_meta['zones']}
 - **Checkpoint** `{m.get('checkpoint', 'n/a')}`
-- **Held-out MAPE** {m.get('overall_mape', float('nan')):.2f}% overall ·
-  {(m.get('day_mape') or {}).get(1, float('nan')):.2f}% at 24h
+- **Held-out MAPE** {overall_txt}{day1_txt}
 - **Timings** fetch {t.get('fetch', 0):.1f}s · features {t.get('features', 0):.2f}s ·
   inference {t.get('inference', 0):.2f}s · total {t.get('total', 0):.1f}s
 - **Sources** NYISO `palIntegrated` (actuals) · NYISO `isolf` (their forecast) ·
